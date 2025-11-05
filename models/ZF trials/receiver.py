@@ -1,963 +1,536 @@
-# import os
-# import sys
-# import numpy as np
-# import matplotlib.pyplot as plt
-# from scipy.linalg import inv, pinv
-# import warnings
-
-# # --- Imports from other files ---
-# try:
-#     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# except NameError:
-#     SCRIPT_DIR = os.getcwd()
-# sys.path.insert(0, SCRIPT_DIR)
-
-# try:
-#     from lgBeam import LaguerreGaussianBeam
-#     # Imports are now known to be correct
-#     from encoding import QPSKModulator, SimplifiedLDPC, PilotHandler
-# except ImportError as e:
-#     print(f"Error importing required modules: {e}")
-#     print(f"Please ensure lgBeam.py and encoding.py are in the directory: {SCRIPT_DIR}")
-#     sys.exit(1)
-# # --- End Imports ---
-
-# warnings.filterwarnings('ignore')
-
-# class OAMDemultiplexer:
-#     """
-#     OAM Demultiplexer using mode projection.
-#     """
-    
-#     def __init__(self, spatial_modes, wavelength, w0, z_distance):
-#         self.spatial_modes = spatial_modes
-#         self.n_modes = len(spatial_modes)
-#         self.wavelength = wavelength
-#         self.w0 = w0
-#         self.z_distance = z_distance
-#         self.reference_beams = {}
-        
-#         for mode_key in self.spatial_modes:
-#             p, l = mode_key
-#             self.reference_beams[mode_key] = LaguerreGaussianBeam(
-#                 p=p, l=l, wavelength=wavelength, w0=w0
-#             )
-
-#     def project_field(self, E_rx, grid_info, receiver_radius=None):
-#         """
-#         Project received field onto OAM modes.
-#         """
-#         X = grid_info['X']
-#         Y = grid_info['Y']
-#         delta = grid_info['delta']
-#         R = np.sqrt(X**2 + Y**2)
-#         PHI = np.arctan2(Y, X)
-#         dA = delta**2
-
-#         if receiver_radius is not None:
-#             aperture_mask = (R <= receiver_radius).astype(float)
-#         else:
-#             aperture_mask = np.ones_like(R)
-
-#         symbols = {}
-        
-#         for mode_key in self.spatial_modes:
-#             beam = self.reference_beams[mode_key]
-#             LG_ref_tx = beam.generate_beam_field(R, PHI, z=0)
-#             LG_ref_apertured = LG_ref_tx * aperture_mask
-#             ref_energy = np.sum(np.abs(LG_ref_apertured)**2) * dA
-#             projection = np.sum(E_rx * np.conj(LG_ref_apertured)) * dA
-
-#             if ref_energy > 1e-20:
-#                 # Correct normalization
-#                 symbols[mode_key] = projection / ref_energy
-#             else:
-#                 symbols[mode_key] = 0.0 + 0.0j
-                
-#         return symbols
-
-#     def extract_symbols_sequence(self, E_rx_sequence, grid_info, receiver_radius=None):
-#         """
-#         Projects a sequence of fields.
-#         """
-#         symbols_per_mode = {mode_key: [] for mode_key in self.spatial_modes}
-#         num_fields = len(E_rx_sequence)
-
-#         for i in range(num_fields):
-#             symbols_snapshot = self.project_field(E_rx_sequence[i], grid_info, receiver_radius)
-#             for mode_key in self.spatial_modes:
-#                 symbols_per_mode[mode_key].append(symbols_snapshot[mode_key])
-
-#         for mode_key in self.spatial_modes:
-#             symbols_per_mode[mode_key] = np.array(symbols_per_mode[mode_key])
-
-#         return symbols_per_mode
-
-
-# class ChannelEstimator:
-#     """
-#     Channel estimator using LS method with pilots.
-#     """
-    
-#     def __init__(self, pilot_handler, spatial_modes):
-#         self.pilot_handler = pilot_handler
-#         self.spatial_modes = spatial_modes
-#         self.n_modes = len(spatial_modes)
-#         self.H_est = None
-#         self.noise_var_est = None
-
-#     def estimate_channel_ls(self, rx_symbols_per_mode, tx_symbols_per_mode):
-#         """
-#         LS channel estimation from pilots.
-#         """
-#         M = self.n_modes
-#         if self.pilot_handler.pilot_positions is None:
-#              raise ValueError("Pilot positions not set in handler.")
-             
-#         pilot_positions = self.pilot_handler.pilot_positions
-#         n_pilots = len(pilot_positions)
-#         if n_pilots == 0:
-#             print("Warning: No pilots found for channel estimation. Returning Identity.")
-#             self.H_est = np.eye(M, dtype=complex)
-#             return self.H_est
-
-#         # Find the minimum frame length *at the receiver*
-#         min_rx_len = min([len(rx_symbols_per_mode[key]) for key in self.spatial_modes])
-#         valid_pilot_pos = pilot_positions[pilot_positions < min_rx_len]
-#         n_pilots = len(valid_pilot_pos)
-        
-#         if n_pilots == 0:
-#             print("Error: No valid pilots found within the frame length.")
-#             return np.eye(M, dtype=complex)
-
-#         Y_pilot = np.zeros((M, n_pilots), dtype=complex)
-#         P_pilot = np.zeros((M, n_pilots), dtype=complex)
-
-#         for idx, mode_key in enumerate(self.spatial_modes):
-#             Y_pilot[idx, :] = rx_symbols_per_mode[mode_key][valid_pilot_pos]
-#             P_pilot[idx, :] = tx_symbols_per_mode[mode_key]['symbols'][valid_pilot_pos]
-
-#         try:
-#             P_PH = P_pilot @ P_pilot.conj().T
-#             cond_num = np.linalg.cond(P_PH)
-#             if cond_num > 1e6: 
-#                 print(f"Warning: Pilot matrix potentially ill-conditioned (cond={cond_num:.2e}). Using pseudo-inverse.")
-#                 H_est = Y_pilot @ pinv(P_pilot)
-#             else:
-#                  H_est = Y_pilot @ P_pilot.conj().T @ inv(P_PH)
-#         except np.linalg.LinAlgError:
-#             print("Warning: Matrix inversion failed. Using pseudo-inverse for H estimation.")
-#             H_est = Y_pilot @ pinv(P_pilot)
-
-#         self.H_est = H_est
-#         return H_est
-
-#     def estimate_noise_variance(self, rx_symbols_per_mode, tx_symbols_per_mode, H_est):
-#         """
-#         Estimate noise variance from pilot residuals.
-#         """
-#         M = self.n_modes
-#         pilot_positions = self.pilot_handler.pilot_positions
-#         n_pilots = len(pilot_positions)
-#         if n_pilots == 0: return 1e-6 
-
-#         # Find the minimum frame length *at the receiver*
-#         min_rx_len = min([len(rx_symbols_per_mode[key]) for key in self.spatial_modes])
-#         valid_pilot_pos = pilot_positions[pilot_positions < min_rx_len]
-#         n_pilots = len(valid_pilot_pos)
-
-#         if n_pilots == 0:
-#             print("Warning: No valid pilots for noise estimation.")
-#             return 1e-6
-
-#         Y_pilot = np.zeros((M, n_pilots), dtype=complex)
-#         P_pilot = np.zeros((M, n_pilots), dtype=complex)
-
-#         for idx, mode_key in enumerate(self.spatial_modes):
-#             Y_pilot[idx, :] = rx_symbols_per_mode[mode_key][valid_pilot_pos]
-#             P_pilot[idx, :] = tx_symbols_per_mode[mode_key]['symbols'][valid_pilot_pos]
-
-#         if H_est is None or H_est.shape[0] != M:
-#             print("Warning: Invalid H_est provided for noise estimation. Returning default.")
-#             return 1e-6
-
-#         error = Y_pilot - H_est @ P_pilot
-#         noise_var = np.mean(np.abs(error)**2)
-#         noise_var = max(noise_var, 1e-9) 
-
-#         self.noise_var_est = noise_var
-#         return noise_var
-
-
-# class FSORx:
-#     """
-#     Complete FSO-OAM Receiver - SIMPLIFIED ZF-ONLY VERSION
-#     """
-    
-#     def __init__(self, spatial_modes, wavelength, w0, z_distance,
-#                  fec_rate=0.8, pilot_handler=None,
-#                  eq_method='zf', receiver_radius=None):
-#         self.spatial_modes = spatial_modes
-#         self.n_modes = len(spatial_modes)
-#         self.wavelength = wavelength
-#         self.w0 = w0
-#         self.z_distance = z_distance
-#         self.eq_method = 'zf'
-#         self.receiver_radius = receiver_radius
-
-#         if pilot_handler is None:
-#              raise ValueError("FSORx requires a PilotHandler instance used by the transmitter.")
-#         self.pilot_handler = pilot_handler
-
-#         self.demux = OAMDemultiplexer(spatial_modes, wavelength, w0, z_distance)
-#         self.channel_estimator = ChannelEstimator(self.pilot_handler, spatial_modes)
-#         self.qpsk = QPSKModulator(symbol_energy=1.0)
-#         self.ldpc = SimplifiedLDPC(n=1024, rate=fec_rate) 
-#         self.metrics = {} 
-
-#     def receive_sequence(self, E_rx_sequence, grid_info, tx_signals, original_data_bits, verbose=True):
-#         """
-#         Processes a SEQUENCE of received fields (SIMPLIFIED ZF-ONLY).
-#         """
-#         if verbose: print("\n" + "="*70 + "\nFSO-OAM RECEIVER PROCESSING (ZF-Only)\n" + "="*70)
-
-#         # 1. OAM Demultiplexing
-#         if verbose: print("\n1. OAM Demultiplexing Sequence...")
-#         rx_symbols_per_mode = self.demux.extract_symbols_sequence(
-#             E_rx_sequence, grid_info, self.receiver_radius
-#         )
-#         if verbose: print(f"   Extracted symbol streams for {self.n_modes} modes.")
-#         first_mode = self.spatial_modes[0]
-#         total_rx_symbols = len(rx_symbols_per_mode[first_mode])
-#         if verbose: print(f"   Total received symbols per mode stream: {total_rx_symbols}")
-
-
-#         # 2. Channel Estimation
-#         if verbose: print("\n2. Channel Estimation (LS using Pilots)...")
-#         H_est = self.channel_estimator.estimate_channel_ls(rx_symbols_per_mode, tx_signals)
-#         if verbose:
-#             print(f"   Estimated Channel Matrix H_est (Magnitude):")
-#             for row in np.abs(H_est):
-#                 print(f"     [{' '.join(f'{x:.3f}' for x in row)}]")
-#             print(f"   Channel condition number: {np.linalg.cond(H_est):.2f}")
-
-#         # 3. Noise Estimation
-#         if verbose: print("\n3. Noise Variance Estimation...")
-#         noise_var = self.channel_estimator.estimate_noise_variance(rx_symbols_per_mode, tx_signals, H_est)
-#         if verbose: print(f"   Estimated Noise Variance σ² = {noise_var:.6f}")
-
-#         # 4. Separate Pilots and Data
-#         if verbose: print("\n4. Separating Pilots and Data Symbols...")
-#         rx_data_symbols_per_mode = {}
-        
-#         # Get pilot positions valid for this frame length
-#         valid_pilot_pos = self.pilot_handler.pilot_positions[self.pilot_handler.pilot_positions < total_rx_symbols]
-        
-#         for mode_key in self.spatial_modes:
-#             data_mask = np.ones(total_rx_symbols, dtype=bool)
-#             data_mask[valid_pilot_pos] = False
-#             rx_data_symbols_per_mode[mode_key] = rx_symbols_per_mode[mode_key][data_mask]
-#             if verbose: print(f"   Mode {mode_key}: Found {len(rx_data_symbols_per_mode[mode_key])} data symbols.")
-
-#         # Assemble data symbols into matrix Y_data (M x N_data)
-#         data_lengths = [len(v) for v in rx_data_symbols_per_mode.values()]
-        
-#         if len(set(data_lengths)) > 1:
-#             print(f"Warning: Uneven number of data symbols across modes ({set(data_lengths)}). Truncating to minimum.")
-#             min_data_len = min(data_lengths)
-#             Y_data = np.array([rx_data_symbols_per_mode[mode_key][:min_data_len] for mode_key in self.spatial_modes])
-#         elif not data_lengths or data_lengths[0] == 0:
-#              print("Error: No data symbols found.")
-#              self.metrics = {'ber': 1.0, 'bit_errors': len(original_data_bits), 'total_bits': len(original_data_bits), 'H_est': H_est, 'noise_var': noise_var}
-#              return np.array([], dtype=int), self.metrics
-#         else:
-#              min_data_len = data_lengths[0]
-#              Y_data = np.array([rx_data_symbols_per_mode[mode_key] for mode_key in self.spatial_modes])
-
-
-#         # 5. Zero-Forcing Equalization
-#         if verbose: print(f"\n5. Equalizing Data Symbols (ZF)...")
-#         try:
-#             W_ZF = inv(H_est)
-#             S_est_data = W_ZF @ Y_data
-#         except np.linalg.LinAlgError:
-#             print("Warning: ZF matrix inversion failed. Using pseudo-inverse.")
-#             W_ZF = pinv(H_est)
-#             S_est_data = W_ZF @ Y_data
-            
-#         if verbose: print(f"   Equalized {S_est_data.shape[1]} data symbols per mode.")
-
-#         # 6. Demodulation (Soft)
-#         if verbose: print("\n6. QPSK Demodulation (Soft)...")
-#         # S_est_data is (M x N_data). We must flatten it row-by-row ("C" order)
-#         s_est_flat = S_est_data.flatten()
-#         llrs = self.qpsk.demodulate_soft(s_est_flat, noise_var)
-#         if verbose: print(f"   Generated {len(llrs)} LLRs.")
-
-#         # 7. Decoding
-#         if verbose: print("\n7. LDPC Decoding...")
-#         received_bits_hard = (llrs < 0).astype(int)
-
-#         n_ldpc = self.ldpc.n # e.g., 1024
-#         k_ldpc = self.ldpc.k # e.g., 819
-        
-#         ### --- THIS IS THE FIX (v7) --- ###
-#         # Instead of truncating to 0 codewords, we pad the stream
-#         # to the *next* full codeword size. This simulates
-#         # "rate matching" and allows the decoder to work.
-        
-#         num_codewords_full = len(received_bits_hard) // n_ldpc
-#         remaining_bits = len(received_bits_hard) % n_ldpc
-        
-#         decoded_bits_list = []
-
-#         # 1. Decode all the full codewords
-#         if num_codewords_full > 0:
-#             trunc_len = num_codewords_full * n_ldpc
-#             full_blocks = received_bits_hard[:trunc_len]
-#             decoded_bits_list.append(self.ldpc.decode_simple(full_blocks))
-            
-#         # 2. Pad and decode the final, partial codeword
-#         if remaining_bits > k_ldpc: 
-#             # We have enough bits (e.g., 1010) to *almost* make a
-#             # codeword, but not quite.
-#             print(f"Warning: Received partial codeword ({remaining_bits} bits). Padding to {n_ldpc} with zeros.")
-#             pad_len = n_ldpc - remaining_bits
-#             partial_block = received_bits_hard[num_codewords_full * n_ldpc:]
-#             padded_block = np.concatenate([partial_block, np.zeros(pad_len, dtype=int)])
-#             decoded_bits_list.append(self.ldpc.decode_simple(padded_block))
-            
-#         elif remaining_bits > 0:
-#             # We have some leftover bits (e.g. 50), but not enough to
-#             # even attempt decoding. Discard them.
-#             print(f"Warning: Discarding {remaining_bits} trailing bits, insufficient for a codeword.")
-
-#         if not decoded_bits_list:
-#             print("Error: No full LDPC codewords to decode.")
-#             decoded_bits = np.array([], dtype=int)
-#         else:
-#             decoded_bits = np.concatenate(decoded_bits_list)
-#         ### --- END OF FIX --- ###
-             
-#         if verbose: print(f"   Decoded {len(decoded_bits)} information bits.")
-
-#         # 8. Performance Analysis (BER)
-#         if verbose: print("\n8. Performance Analysis...")
-        
-#         len_original = len(original_data_bits)
-#         len_recovered = len(decoded_bits)
-        
-#         # Find the minimum length to compare
-#         compare_len = min(len_original, len_recovered)
-        
-#         if compare_len == 0 and len_original > 0:
-#             print("Error: No bits recovered for comparison.")
-#             bit_errors = len_original # Count all as errors
-#             ber = 1.0
-#             len_mismatch_errors = len_original
-#         elif len_original == 0:
-#             print("Warning: No original bits to compare against.")
-#             bit_errors = 0
-#             ber = 0.0
-#             len_mismatch_errors = 0
-#         else:
-#             # Trim both arrays to the minimum length
-#             trimmed_original = original_data_bits[:compare_len]
-#             trimmed_recovered = decoded_bits[:compare_len]
-            
-#             # 1. Calculate errors in the common block
-#             bit_errors_common = np.sum(trimmed_original != trimmed_recovered)
-            
-#             # 2. Add errors for any bits that were completely lost (length mismatch)
-#             len_mismatch_errors = abs(len_original - len_recovered)
-            
-#             # 3. Total errors
-#             bit_errors = bit_errors_common + len_mismatch_errors
-            
-#             # 4. BER is total errors divided by the *original* number of bits
-#             ber = bit_errors / len_original
-
-#         self.metrics = {
-#             'H_est': H_est,
-#             'noise_var': noise_var,
-#             'bit_errors': bit_errors,
-#             'total_bits': len_original, # Report what we *should* have received
-#             'ber': ber
-#         }
-#         if verbose:
-#              print(f"   Original Info Bits: {len_original}")
-#              print(f"   Recovered Info Bits: {len_recovered}")
-#              print(f"   Compared Bits: {compare_len}")
-#              print(f"   Bit Errors: {bit_errors} (incl. {len_mismatch_errors} from length mismatch)")
-#              print(f"   BER: {ber:.2e}")
-
-#         if verbose: print("\n" + "="*70)
-
-#         # Return the recovered bits for potential further analysis
-#         return decoded_bits, self.metrics
-
-
-
+# receiver.py -- Receiver for FSO-MDM OAM system (aligned to your rectified encoder & turbulence)
+# Requirements: numpy, scipy, matplotlib, encoding.py, turbulence.py, lgBeam.py (optional but preferred)
 import os
 import sys
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.linalg import inv, pinv
-from scipy.fft import fft2, ifft2, fftfreq
-import warnings
+from scipy.fft import fft2, ifft2
+from typing import Dict, Tuple, Any, Optional
 
-# --- Imports from other files ---
+# script dir resolution (same pattern used in other modules)
 try:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     SCRIPT_DIR = os.getcwd()
 sys.path.insert(0, SCRIPT_DIR)
 
+# imports from your rectified modules
+try:
+    from encoding import QPSKModulator, PilotHandler, PyLDPCWrapper, FSO_MDM_Frame
+except Exception as e:
+    raise ImportError(f"receiver.py requires encoding.py in the same directory: {e}")
+
+try:
+    from turbulence import angular_spectrum_propagation
+except Exception as e:
+    angular_spectrum_propagation = None
+    warnings.warn(f"turbulence.angular_spectrum_propagation not available: {e}")
+
+# lgBeam may or may not be needed (we prefer using beam instances attached to frame)
 try:
     from lgBeam import LaguerreGaussianBeam
-    # Imports are now known to be correct
-    from encoding import QPSKModulator, SimplifiedLDPC, PilotHandler
-    from turbulence import angular_spectrum_propagation  # Import for numerical propagation
-except ImportError as e:
-    print(f"Error importing required modules: {e}")
-    print(f"Please ensure lgBeam.py and encoding.py are in the directory: {SCRIPT_DIR}")
-    sys.exit(1)
-# --- End Imports ---
+except Exception:
+    LaguerreGaussianBeam = None
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
+
+# -------------------------------------------------------
+# Utilities: grid reconstruction, normalization helpers
+# -------------------------------------------------------
+def reconstruct_grid_from_gridinfo(grid_info: Dict[str, Any]):
+    """
+    grid_info expected keys (from encoding._generate_spatial_field):
+      - x: 1D array
+      - y: 1D array
+      - grid_size or extent_m (not mandatory)
+    Returns X,Y,delta (float), x,y arrays
+    """
+    if grid_info is None:
+        raise ValueError("grid_info is required to reconstruct spatial grid.")
+    x = np.asarray(grid_info.get("x"))
+    y = np.asarray(grid_info.get("y"))
+    if x.size == 0 or y.size == 0:
+        raise ValueError("grid_info.x/y empty or missing.")
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    # sampling interval (assume uniform)
+    delta_x = np.mean(np.diff(x))
+    delta_y = np.mean(np.diff(y))
+    if not np.isclose(delta_x, delta_y, rtol=1e-6, atol=0.0):
+        warnings.warn("Non-square sampling intervals detected; using delta_x as delta.")
+    delta = float(delta_x)
+    return X, Y, delta, x, y
+
+
+def energy_normalize_field(field: np.ndarray, delta: float):
+    """
+    Normalize field so that total power (sum |E|^2 * delta^2) == 1
+    """
+    p = np.sum(np.abs(field) ** 2) * (delta ** 2)
+    if p > 0:
+        return field / np.sqrt(p)
+    return field
+
+
+# -------------------------------------------------------
+# OAM Demultiplexer (mode projection)
+# -------------------------------------------------------
 class OAMDemultiplexer:
     """
-    OAM Demultiplexer using mode projection.
+    Project received complex field onto reference LG modes (uses transmitter's beam objects when present).
     """
-    
-    def __init__(self, spatial_modes, wavelength, w0, z_distance):
-        self.spatial_modes = spatial_modes
-        self.n_modes = len(spatial_modes)
+
+    def __init__(self, spatial_modes, wavelength, w0, z_distance, angular_prop_func=angular_spectrum_propagation):
+        self.spatial_modes = list(spatial_modes)
+        self.n_modes = len(self.spatial_modes)
         self.wavelength = wavelength
         self.w0 = w0
         self.z_distance = z_distance
-        self.reference_beams = {}
-        
-        for mode_key in self.spatial_modes:
-            p, l = mode_key
-            self.reference_beams[mode_key] = LaguerreGaussianBeam(
-                p=p, l=l, wavelength=wavelength, w0=w0
-            )
+        self.angular_prop = angular_prop_func
+        # cache for reference fields per grid size/delta
+        self._ref_cache = {}
 
-    def project_field(self, E_rx, grid_info, receiver_radius=None):
+    def _make_ref_key(self, mode_key, N, delta, X_shape):
+        return (mode_key, int(N), float(delta), X_shape)
+
+    def reference_field(self, mode_key: Tuple[int, int], X, Y, delta, grid_z, tx_beam_obj=None):
         """
-        Project received field onto OAM modes.
-        
-        CRITICAL FIX: The received field E_rx was propagated using numerical
-        angular spectrum method. Therefore, the reference beams MUST also be
-        propagated numerically to match. Using analytical reference beams causes
-        a mismatch that breaks mode projection.
-        
-        Literature: Mode projection requires the reference basis to match the
-        propagation method used for the received field (Goodman 2005, Ch. 3).
-        
-        Note: E_rx should already have the aperture mask applied (from completeFSOSystem.py).
-        We apply the aperture mask to the reference beam to match.
+        Construct (or retrieve) propagated reference field for mode_key on grid X,Y (at z=grid_z).
+        If tx_beam_obj is provided (the beam instance saved by transmitter), use it to generate reference at z=0 then propagate.
         """
-        X = grid_info['X']
-        Y = grid_info['Y']
-        delta = grid_info['delta']
-        R = np.sqrt(X**2 + Y**2)
+        N = X.shape[0]
+        key = self._make_ref_key(mode_key, N, delta, X.shape)
+        if key in self._ref_cache:
+            return self._ref_cache[key].copy()
+
+        # compute R,PHI and generate reference field at z=0 via provided beam or by constructing LaguerreGaussianBeam
+        R = np.sqrt(X ** 2 + Y ** 2)
         PHI = np.arctan2(Y, X)
-        dA = delta**2
 
+        beam = tx_beam_obj
+        if beam is None:
+            # try to instantiate if lgBeam available (fallback)
+            p, l = mode_key
+            if LaguerreGaussianBeam is None:
+                raise RuntimeError("No beam instance available and lgBeam import missing.")
+            beam = LaguerreGaussianBeam(p, l, self.wavelength, self.w0)
+
+        ref_z0 = beam.generate_beam_field(R, PHI, 0.0)
+        # propagate numerically to grid z if requested (+ uses angular spectrum function if available)
+        if self.angular_prop is None or grid_z == 0.0:
+            ref = ref_z0
+        else:
+            ref = self.angular_prop(ref_z0.copy(), delta, self.wavelength, grid_z)
+
+        # store (aperture-unmasked) reference in cache
+        self._ref_cache[key] = ref.copy()
+        return ref
+
+    def project_field(self, E_rx, grid_info, receiver_radius=None, tx_frame=None):
+        """
+        Project single complex field (E_rx) onto modes in self.spatial_modes.
+        - grid_info: from frame.grid_info
+        - tx_frame: optional FSO_MDM_Frame to pull beam instances / pilot positions
+        Returns dict mapping mode_key -> complex projection symbol (per-slice).
+        """
+        X, Y, delta, x, y = reconstruct_grid_from_gridinfo(grid_info)
+        R = np.sqrt(X ** 2 + Y ** 2)
+
+        # if E_rx is intensity-only (real, >=0) attempt to construct amplitude; warn user
+        if not np.iscomplexobj(E_rx):
+            warnings.warn("E_rx appears to be real (intensity). Assuming zero-phase sqrt(I) field for projection.")
+            E_rx = np.sqrt(np.abs(E_rx)).astype(np.complex128)
+
+        dA = float(delta ** 2)
         if receiver_radius is not None:
             aperture_mask = (R <= receiver_radius).astype(float)
         else:
-            aperture_mask = np.ones_like(R)
+            aperture_mask = np.ones_like(R, dtype=float)
 
         symbols = {}
-        
-        for mode_key in self.spatial_modes:
-            beam = self.reference_beams[mode_key]
-            
-            # CRITICAL FIX: Reference beam must be propagated NUMERICALLY to match
-            # the received field, which was propagated using angular_spectrum_propagation.
-            # Generate reference at z=0, then propagate numerically to z=distance.
-            LG_ref_z0 = beam.generate_beam_field(R, PHI, z=0)
-            LG_ref = angular_spectrum_propagation(
-                LG_ref_z0.copy(), 
-                delta, 
-                beam.wavelength, 
-                self.z_distance
-            )
-            
-            # Apply aperture mask to reference beam to match E_rx (which already has aperture)
-            LG_ref_apertured = LG_ref * aperture_mask
-            
-            # Compute normalization: <ref, ref> integrated over aperture
-            ref_energy = np.sum(np.abs(LG_ref_apertured)**2) * dA
-            
-            # Compute projection: <E_rx, ref> integrated over aperture
-            # Note: E_rx already has aperture mask applied in completeFSOSystem.py
-            projection = np.sum(E_rx * np.conj(LG_ref_apertured)) * dA
+        N = X.shape[0]
 
+        for mode_key in self.spatial_modes:
+            tx_beam_obj = None
+            if tx_frame is not None:
+                # try to get beam instance stored in frame.tx_signals
+                sig = tx_frame.tx_signals.get(mode_key)
+                if sig is not None:
+                    tx_beam_obj = sig.get("beam", None)
+
+            ref = self.reference_field(mode_key, X, Y, delta, grid_z=self.z_distance, tx_beam_obj=tx_beam_obj)
+            ref_ap = ref * aperture_mask
+            ref_energy = np.sum(np.abs(ref_ap) ** 2) * dA
+            projection = np.sum(E_rx * np.conj(ref_ap)) * dA
             if ref_energy > 1e-20:
-                # Normalized projection gives the symbol coefficient
                 symbols[mode_key] = projection / ref_energy
             else:
                 symbols[mode_key] = 0.0 + 0.0j
-                
         return symbols
 
-    def extract_symbols_sequence(self, E_rx_sequence, grid_info, receiver_radius=None):
+    def extract_symbols_sequence(self, E_rx_sequence, grid_info, receiver_radius=None, tx_frame=None):
         """
-        Projects a sequence of fields.
+        Accepts E_rx_sequence as:
+          - list/np.ndarray of 2D complex fields (n_frames x N x N)
+          - or single 2D field -> returns single-column arrays
+        Returns symbols_per_mode: dict mode_key -> complex array (len = n_frames)
         """
-        symbols_per_mode = {mode_key: [] for mode_key in self.spatial_modes}
-        num_fields = len(E_rx_sequence)
-
-        for i in range(num_fields):
-            symbols_snapshot = self.project_field(E_rx_sequence[i], grid_info, receiver_radius)
-            for mode_key in self.spatial_modes:
-                symbols_per_mode[mode_key].append(symbols_snapshot[mode_key])
-
-        for mode_key in self.spatial_modes:
-            symbols_per_mode[mode_key] = np.array(symbols_per_mode[mode_key])
-
+        # convert to array-like
+        seq = np.asarray(E_rx_sequence)
+        if seq.ndim == 2:
+            seq = seq[np.newaxis, ...]  # shape (1, N, N)
+        n_frames = seq.shape[0]
+        symbols_per_mode = {mode: np.zeros(n_frames, dtype=complex) for mode in self.spatial_modes}
+        for i in range(n_frames):
+            symbols_snapshot = self.project_field(seq[i], grid_info, receiver_radius, tx_frame=tx_frame)
+            for mode in self.spatial_modes:
+                symbols_per_mode[mode][i] = symbols_snapshot.get(mode, 0.0 + 0.0j)
         return symbols_per_mode
 
 
+# -------------------------------------------------------
+# Channel estimator (LS + optional MMSE fallback)
+# -------------------------------------------------------
 class ChannelEstimator:
     """
-    Channel estimator using LS method with pilots.
+    LS channel estimator using pilot symbols. Expects tx_signals shaped per encodingRunner frame.
     """
-    
-    def __init__(self, pilot_handler, spatial_modes):
+
+    def __init__(self, pilot_handler: PilotHandler, spatial_modes):
         self.pilot_handler = pilot_handler
-        self.spatial_modes = spatial_modes
-        self.n_modes = len(spatial_modes)
+        self.spatial_modes = list(spatial_modes)
+        self.M = len(self.spatial_modes)
         self.H_est = None
         self.noise_var_est = None
 
-    def estimate_channel_ls(self, rx_symbols_per_mode, tx_symbols_per_mode):
+    def _gather_pilots(self, rx_symbols_per_mode: Dict[Tuple[int,int], np.ndarray],
+                       tx_frame: FSO_MDM_Frame):
         """
-        LS channel estimation from pilots.
+        Construct Y_pilot (M x n_p) and P_pilot (M x n_p) aligned on valid pilot indices within frame length.
+        Uses pilot positions from tx_frame.tx_signals[mode]['pilot_positions'] if present; else uses self.pilot_handler.pilot_positions.
         """
-        M = self.n_modes
-        if self.pilot_handler.pilot_positions is None:
-             raise ValueError("Pilot positions not set in handler.")
-             
-        pilot_positions = self.pilot_handler.pilot_positions
-        n_pilots = len(pilot_positions)
-        if n_pilots == 0:
-            print("Warning: No pilots found for channel estimation. Returning Identity.")
-            self.H_est = np.eye(M, dtype=complex)
+        # verify we have pilots on TX frame if provided
+        first_mode = self.spatial_modes[0]
+        tx_signals = tx_frame.tx_signals if tx_frame is not None else {}
+        # determine pilot positions (global): try tx_signals first
+        pilot_positions = None
+        for mode_key in self.spatial_modes:
+            sig = tx_signals.get(mode_key)
+            if sig is not None and "pilot_positions" in sig:
+                pilot_positions = np.asarray(sig["pilot_positions"])
+                break
+        if pilot_positions is None:
+            # fallback to pilot_handler's last-known positions
+            pilot_positions = np.asarray(self.pilot_handler.pilot_positions) if self.pilot_handler.pilot_positions is not None else np.array([], dtype=int)
+
+        # ensure integer positions and valid length
+        if pilot_positions is None or len(pilot_positions) == 0:
+            return None, None, np.array([], dtype=int)
+
+        # gather min rx frame length
+        min_rx_len = min([len(rx_symbols_per_mode[mk]) for mk in self.spatial_modes])
+        valid_pos = pilot_positions[pilot_positions < min_rx_len]
+        if len(valid_pos) == 0:
+            return None, None, np.array([], dtype=int)
+
+        n_p = len(valid_pos)
+        Y_p = np.zeros((self.M, n_p), dtype=complex)
+        P_p = np.zeros((self.M, n_p), dtype=complex)
+
+        for idx, mk in enumerate(self.spatial_modes):
+            Y_p[idx, :] = rx_symbols_per_mode[mk][valid_pos]
+            # TX symbols must be retrievable from tx_frame
+            if tx_frame is None or mk not in tx_frame.tx_signals:
+                raise ValueError("tx_frame with tx_signals required for LS channel estimation (to provide pilot symbols).")
+            tx_syms = tx_frame.tx_signals[mk]["symbols"]
+            P_p[idx, :] = tx_syms[valid_pos]
+
+        return Y_p, P_p, valid_pos
+
+    def estimate_channel_ls(self, rx_symbols_per_mode: Dict[Tuple[int, int], np.ndarray], tx_frame: FSO_MDM_Frame):
+        Y_p, P_p, pilot_pos = self._gather_pilots(rx_symbols_per_mode, tx_frame)
+        if Y_p is None or P_p is None or P_p.size == 0:
+            warnings.warn("No valid pilots found for LS channel estimation. Returning identity H.")
+            self.H_est = np.eye(self.M, dtype=complex)
             return self.H_est
 
-        # Find the minimum frame length *at the receiver*
-        min_rx_len = min([len(rx_symbols_per_mode[key]) for key in self.spatial_modes])
-        valid_pilot_pos = pilot_positions[pilot_positions < min_rx_len]
-        n_pilots = len(valid_pilot_pos)
-        
-        if n_pilots == 0:
-            print("Error: No valid pilots found within the frame length.")
-            return np.eye(M, dtype=complex)
-
-        Y_pilot = np.zeros((M, n_pilots), dtype=complex)
-        P_pilot = np.zeros((M, n_pilots), dtype=complex)
-
-        for idx, mode_key in enumerate(self.spatial_modes):
-            Y_pilot[idx, :] = rx_symbols_per_mode[mode_key][valid_pilot_pos]
-            P_pilot[idx, :] = tx_symbols_per_mode[mode_key]['symbols'][valid_pilot_pos]
-
+        # LS: H = Y_p * P_p^H * (P_p P_p^H)^{-1}
         try:
-            P_PH = P_pilot @ P_pilot.conj().T
-            cond_num = np.linalg.cond(P_PH)
-            if cond_num > 1e-6: 
-                print(f"Warning: Pilot matrix potentially ill-conditioned (cond={cond_num:.2e}). Using pseudo-inverse.")
-                H_est = Y_pilot @ pinv(P_pilot)
+            PPH = P_p @ P_p.conj().T
+            cond = np.linalg.cond(PPH)
+            if cond > 1e6:
+                warnings.warn(f"Pilot Gram matrix ill-conditioned (cond={cond:.2e}), using pseudo-inverse.")
+                H = Y_p @ pinv(P_p)
             else:
-                 H_est = Y_pilot @ P_pilot.conj().T @ inv(P_PH)
+                H = Y_p @ P_p.conj().T @ inv(PPH)
         except np.linalg.LinAlgError:
-            print("Warning: Matrix inversion failed. Using pseudo-inverse for H estimation.")
-            H_est = Y_pilot @ pinv(P_pilot)
+            warnings.warn("Matrix inversion failed; using pseudo-inverse for channel estimate.")
+            H = Y_p @ pinv(P_p)
 
-        self.H_est = H_est
-        return H_est
+        # regularize if extremely small determinant (avoid unstable ZF)
+        if np.linalg.cond(H) > 1e8:
+            reg = 1e-6
+            H = H @ inv(H + reg * np.eye(self.M))
 
-    def estimate_noise_variance(self, rx_symbols_per_mode, tx_symbols_per_mode, H_est):
-        """
-        Estimate noise variance from pilot residuals.
-        """
-        M = self.n_modes
-        pilot_positions = self.pilot_handler.pilot_positions
-        n_pilots = len(pilot_positions)
-        if n_pilots == 0: return 1e-6 
+        self.H_est = H
+        return H
 
-        # Find the minimum frame length *at the receiver*
-        min_rx_len = min([len(rx_symbols_per_mode[key]) for key in self.spatial_modes])
-        valid_pilot_pos = pilot_positions[pilot_positions < min_rx_len]
-        n_pilots = len(valid_pilot_pos)
-
-        if n_pilots == 0:
-            print("Warning: No valid pilots for noise estimation.")
-            return 1e-6
-
-        Y_pilot = np.zeros((M, n_pilots), dtype=complex)
-        P_pilot = np.zeros((M, n_pilots), dtype=complex)
-
-        for idx, mode_key in enumerate(self.spatial_modes):
-            Y_pilot[idx, :] = rx_symbols_per_mode[mode_key][valid_pilot_pos]
-            P_pilot[idx, :] = tx_symbols_per_mode[mode_key]['symbols'][valid_pilot_pos]
-
-        if H_est is None or H_est.shape[0] != M:
-            print("Warning: Invalid H_est provided for noise estimation. Returning default.")
-            return 1e-6
-
-        error = Y_pilot - H_est @ P_pilot
-        noise_var = np.mean(np.abs(error)**2)
-        noise_var = max(noise_var, 1e-9) 
-
+    def estimate_noise_variance(self, rx_symbols_per_mode: Dict[Tuple[int,int], np.ndarray],
+                                tx_frame: FSO_MDM_Frame, H_est: np.ndarray):
+        # compute residual on pilot positions
+        Y_p, P_p, pilot_pos = self._gather_pilots(rx_symbols_per_mode, tx_frame)
+        if Y_p is None or P_p is None or P_p.size == 0:
+            self.noise_var_est = 1e-6
+            return self.noise_var_est
+        residual = Y_p - H_est @ P_p
+        noise_var = np.mean(np.abs(residual) ** 2)
+        noise_var = max(noise_var, 1e-12)
         self.noise_var_est = noise_var
         return noise_var
 
+
+# -------------------------------------------------------
+# FSORx: Full receiver pipeline (ZF/MMSE + LDPC decode)
+# -------------------------------------------------------
 class FSORx:
-    """
-    Complete FSO-OAM Receiver - SIMPLIFIED ZF-ONLY VERSION
-    """
-    
     def __init__(self, spatial_modes, wavelength, w0, z_distance,
-                 fec_rate=0.8, pilot_handler=None,
-                 eq_method='zf', receiver_radius=None, ldpc_instance=None):
-        self.spatial_modes = spatial_modes
-        self.n_modes = len(spatial_modes)
+                 pilot_handler: PilotHandler,
+                 ldpc_instance: Optional[PyLDPCWrapper] = None,
+                 eq_method: str = "zf", receiver_radius: Optional[float] = None):
+        self.spatial_modes = list(spatial_modes)
+        self.n_modes = len(self.spatial_modes)
         self.wavelength = wavelength
         self.w0 = w0
         self.z_distance = z_distance
-        self.eq_method = 'zf'
+        self.pilot_handler = pilot_handler
+        self.eq_method = eq_method.lower()
         self.receiver_radius = receiver_radius
 
-        if pilot_handler is None:
-             raise ValueError("FSORx requires a PilotHandler instance used by the transmitter.")
-        self.pilot_handler = pilot_handler
-
-        self.demux = OAMDemultiplexer(spatial_modes, wavelength, w0, z_distance)
-        self.channel_estimator = ChannelEstimator(self.pilot_handler, spatial_modes)
+        # QPSK mapping must match encoding.QPSKModulator
         self.qpsk = QPSKModulator(symbol_energy=1.0)
-        # CRITICAL FIX: Use the SAME LDPC instance from transmitter to ensure same H matrix
-        # The LDPC encoder generates a random H matrix, so transmitter and receiver must share it
+
+        # LDPC: prefer shared instance from transmitter for exact parity matrix
         if ldpc_instance is not None:
             self.ldpc = ldpc_instance
         else:
-            self.ldpc = SimplifiedLDPC(n=1024, rate=fec_rate)
-            print("Warning: Receiver created new LDPC instance. H matrix may differ from transmitter!")
-        self.metrics = {} 
+            # try to construct default wrapper (requires pyldpc)
+            try:
+                self.ldpc = PyLDPCWrapper(n=2048, rate=0.8, dv=2, dc=8, seed=42)
+                warnings.warn("No LDPC instance provided; receiver created local PyLDPCWrapper that may not match TX.")
+            except Exception as e:
+                raise RuntimeError(f"Cannot construct LDPC wrapper. Provide ldpc_instance from transmitter. Error: {e}")
 
-    def receive_sequence(self, E_rx_sequence, grid_info, tx_signals, original_data_bits, verbose=True):
+        self.demux = OAMDemultiplexer(self.spatial_modes, self.wavelength, self.w0, self.z_distance)
+        self.chan_est = ChannelEstimator(self.pilot_handler, self.spatial_modes)
+        self.metrics = {}
+
+    def receive_frame(self, rx_field_sequence, tx_frame: FSO_MDM_Frame,
+                      original_data_bits: np.ndarray, verbose: bool = True):
         """
-        Processes a SEQUENCE of received fields (SIMPLIFIED ZF-ONLY).
+        Main receiver routine:
+          - rx_field_sequence: array-like of complex fields (n_frames x N x N) or single 2D field
+          - tx_frame: FSO_MDM_Frame produced by encodingRunner.transmit(...)
+          - original_data_bits: ground-truth info bits for final BER calculation
+        Returns: decoded_bits (1D np.array int), metrics dict
         """
-        if verbose: print("\n" + "="*70 + "\nFSO-OAM RECEIVER PROCESSING (ZF-Only)\n" + "="*70)
-
-        # 1. OAM Demultiplexing
-        if verbose: print("\n1. OAM Demultiplexing Sequence...")
-        rx_symbols_per_mode = self.demux.extract_symbols_sequence(
-            E_rx_sequence, grid_info, self.receiver_radius
-        )
-        if verbose: print(f"   Extracted symbol streams for {self.n_modes} modes.")
-        first_mode = self.spatial_modes[0]
-        # This is the 'true' length of the simulation, truncated to the minimum
-        total_rx_symbols = len(rx_symbols_per_mode[first_mode])
-        if verbose: print(f"   Total received symbols per mode stream: {total_rx_symbols}")
-
-
-        # 2. Channel Estimation
-        if verbose: print("\n2. Channel Estimation (LS using Pilots)...")
-        H_est = self.channel_estimator.estimate_channel_ls(rx_symbols_per_mode, tx_signals)
         if verbose:
-            print(f"   Estimated Channel Matrix H_est (Magnitude):")
+            print("\n" + "=" * 72)
+            print("FSO-OAM Receiver: Start")
+            print("=" * 72)
+
+        # grid info from tx_frame (required)
+        grid_info = tx_frame.grid_info
+        if grid_info is None:
+            raise ValueError("tx_frame.grid_info required for demux/projection.")
+
+        # 1) Demultiplex: projection
+        if verbose: print("1) OAM demultiplexing (projection)...")
+        rx_symbols_per_mode = self.demux.extract_symbols_sequence(rx_field_sequence, grid_info,
+                                                                   receiver_radius=self.receiver_radius,
+                                                                   tx_frame=tx_frame)
+        if verbose:
+            first_mode = self.spatial_modes[0]
+            print(f"   Extracted {len(rx_symbols_per_mode[first_mode])} symbols per mode (incl. pilots).")
+
+        # 2) Channel estimation (LS using pilots)
+        if verbose: print("2) Channel estimation (LS using pilots)...")
+        H_est = self.chan_est.estimate_channel_ls(rx_symbols_per_mode, tx_frame)
+        if verbose:
+            print("   H_est magnitude (rows):")
             for row in np.abs(H_est):
-                print(f"     [{' '.join(f'{x:.3f}' for x in row)}]")
-            print(f"   Channel condition number: {np.linalg.cond(H_est):.2f}")
+                print("     [" + " ".join(f"{v:.3f}" for v in row) + "]")
+            print(f"   cond(H_est) = {np.linalg.cond(H_est):.2e}")
 
-        # 3. Noise Estimation
-        if verbose: print("\n3. Noise Variance Estimation...")
-        noise_var = self.channel_estimator.estimate_noise_variance(rx_symbols_per_mode, tx_signals, H_est)
-        if verbose: print(f"   Estimated Noise Variance σ² = {noise_var:.6f}")
+        # 3) Noise estimate from pilot residuals
+        if verbose: print("3) Noise variance estimation...")
+        noise_var = self.chan_est.estimate_noise_variance(rx_symbols_per_mode, tx_frame, H_est)
+        if verbose:
+            print(f"   Estimated noise variance σ² = {noise_var:.3e}")
 
-        # 4. Separate Pilots and Data
-        if verbose: print("\n4. Separating Pilots and Data Symbols...")
-        rx_data_symbols_per_mode = {}
-        
-        # Get pilot positions valid for this frame length
-        valid_pilot_pos = self.pilot_handler.pilot_positions[self.pilot_handler.pilot_positions < total_rx_symbols]
-        
-        # Create the one, correct data mask
+        # 4) Separate pilots and data symbols (use pilot positions from tx_frame)
+        if verbose: print("4) Separate pilots and data")
+        # determine pilot positions array from tx_frame
+        pilot_positions = None
+        for mk in self.spatial_modes:
+            sig = tx_frame.tx_signals.get(mk)
+            if sig is not None and "pilot_positions" in sig:
+                pilot_positions = np.asarray(sig["pilot_positions"])
+                break
+        if pilot_positions is None:
+            pilot_positions = np.asarray(self.pilot_handler.pilot_positions) if self.pilot_handler.pilot_positions is not None else np.array([], dtype=int)
+
+        # length check and data mask
+        first_mode = self.spatial_modes[0]
+        total_rx_symbols = len(rx_symbols_per_mode[first_mode])
         data_mask = np.ones(total_rx_symbols, dtype=bool)
-        if len(valid_pilot_pos) > 0:
-            data_mask[valid_pilot_pos] = False
+        if pilot_positions is not None and pilot_positions.size > 0:
+            valid_pilots = pilot_positions[pilot_positions < total_rx_symbols]
+            data_mask[valid_pilots] = False
 
-        for mode_key in self.spatial_modes:
-            rx_data_symbols_per_mode[mode_key] = rx_symbols_per_mode[mode_key][data_mask]
-            if verbose: print(f"   Mode {mode_key}: Found {len(rx_data_symbols_per_mode[mode_key])} data symbols.")
-
-        # Assemble data symbols into matrix Y_data (M x N_data)
-        data_lengths = [len(v) for v in rx_data_symbols_per_mode.values()]
-        
+        # Build Y_data matrix: M x Ndata (truncate to common min)
+        rx_data_per_mode = {mk: rx_symbols_per_mode[mk][data_mask] for mk in self.spatial_modes}
+        data_lengths = [len(v) for v in rx_data_per_mode.values()]
         if len(set(data_lengths)) > 1:
-            print(f"Warning: Uneven number of data symbols across modes ({set(data_lengths)}). Truncating to minimum.")
-            min_data_len = min(data_lengths)
-            Y_data = np.array([rx_data_symbols_per_mode[mode_key][:min_data_len] for mode_key in self.spatial_modes])
-        elif not data_lengths or data_lengths[0] == 0:
-             print("Error: No data symbols found.")
-             self.metrics = {'ber': 1.0, 'bit_errors': len(original_data_bits), 'total_bits': len(original_data_bits), 'H_est': H_est, 'noise_var': noise_var}
-             return np.array([], dtype=int), self.metrics
-        else:
-             min_data_len = data_lengths[0]
-             Y_data = np.array([rx_data_symbols_per_mode[mode_key] for mode_key in self.spatial_modes])
+            warnings.warn("Uneven data counts across modes; truncating to minimum length.")
+            min_len = min(data_lengths)
+            for mk in self.spatial_modes:
+                rx_data_per_mode[mk] = rx_data_per_mode[mk][:min_len]
+        if data_lengths and data_lengths[0] == 0:
+            raise ValueError("No data symbols available after removing pilots.")
 
+        Y_data = np.vstack([rx_data_per_mode[mk] for mk in self.spatial_modes])  # shape M x Ndata
+        N_data = Y_data.shape[1]
+        if verbose:
+            print(f"   Data symbols per mode: {N_data}")
 
-        # 5. Zero-Forcing Equalization
-        if verbose: print(f"\n5. Equalizing Data Symbols (ZF)...")
+        # 5) Equalize (ZF or MMSE). Use reg if ill-conditioned.
+        if verbose: print("5) Equalization")
+        H = H_est.copy()
+        # if nearly singular, do MMSE instead
         try:
-            W_ZF = inv(H_est)
-            S_est_data = W_ZF @ Y_data
-        except np.linalg.LinAlgError:
-            print("Warning: ZF matrix inversion failed. Using pseudo-inverse.")
-            W_ZF = pinv(H_est)
-            S_est_data = W_ZF @ Y_data
-            
-        if verbose: 
-            print(f"   Equalized {S_est_data.shape[1]} data symbols per mode.")
-            # Diagnostic: Check if equalization is working (compare first few symbols)
-            
-            # === FIX 1 HERE ===
-            if verbose and len(tx_signals) > 0:
-                tx_data_symbols = {}
-                for mode_key in self.spatial_modes:
-                    # Get the actual transmitted symbols for this mode
-                    mode_tx_symbols_original = tx_signals[mode_key]['symbols']
-                    
-                    # *** APPLIED FIX ***
-                    # 1. Truncate original TX symbols to match what receiver processed
-                    mode_tx_symbols_truncated = mode_tx_symbols_original[:total_rx_symbols]
-                    
-                    # 2. Apply the correct data_mask (which is total_rx_symbols long)
-                    tx_data_symbols[mode_key] = mode_tx_symbols_truncated[data_mask][:min_data_len]
-                
-                tx_data_matrix = np.array([tx_data_symbols[mode_key][:min_data_len] for mode_key in self.spatial_modes])
-                print(f"   TX data symbols (first mode, first 5): {tx_data_matrix[0, :5]}")
-                print(f"   RX equalized symbols (first mode, first 5): {S_est_data[0, :5]}")
-                print(f"   Symbol error (first mode, first 5): {np.abs(tx_data_matrix[0, :5] - S_est_data[0, :5])}")
-            # === END FIX 1 ===
-
-        # 6. Demodulation
-        if verbose: print("\n6. QPSK Demodulation...")
-        s_est_flat = S_est_data.flatten()
-        
-        IDEAL_CHANNEL_NOISE_THRESHOLD = 1e-4 
-        
-        if noise_var < IDEAL_CHANNEL_NOISE_THRESHOLD:
-            if verbose: 
-                print(f"   Noise variance ({noise_var:.2e}) is negligible. Using HARD decision demodulation.")
-            received_bits_hard = self.qpsk.demodulate_hard(s_est_flat)
+            cond_H = np.linalg.cond(H)
+        except Exception:
+            cond_H = np.inf
+        if self.eq_method == "auto":
+            use_mmse = cond_H > 1e4
         else:
-            if verbose: 
-                print(f"   Noise variance ({noise_var:.2e}) is significant. Using SOFT decision demodulation.")
+            use_mmse = (self.eq_method == "mmse")
+
+        if not use_mmse:
+            try:
+                W_zf = inv(H)
+                S_est = W_zf @ Y_data
+            except np.linalg.LinAlgError:
+                warnings.warn("ZF inversion failed; switching to pseudo-inverse.")
+                W_zf = pinv(H)
+                S_est = W_zf @ Y_data
+        else:
+            # MMSE: W = (H^H H + σ² I)^{-1} H^H
+            sigma2 = max(noise_var, 1e-12)
+            try:
+                W_mmse = inv(H.conj().T @ H + sigma2 * np.eye(self.n_modes)) @ H.conj().T
+                S_est = W_mmse @ Y_data
+            except np.linalg.LinAlgError:
+                warnings.warn("MMSE matrix inversion failed; fallback to pinv(H).")
+                W_mmse = pinv(H).conj().T
+                S_est = W_mmse @ Y_data
+
+        if verbose:
+            print(f"   Equalized symbols shape: {S_est.shape} (modes x symbols)")
+            print(f"   Sample post-eq symbol (mode 0, first 5): {S_est[0, :5]}")
+
+        # 6) Demodulate: choose hard vs soft depending on noise variance
+        if verbose: print("6) Demodulation (QPSK)")
+        s_est_flat = S_est.flatten()
+        IDEAL_THRESHOLD = 1e-4
+        if noise_var < IDEAL_THRESHOLD:
+            if verbose: print("   Low noise: hard decisions.")
+            received_bits = self.qpsk.demodulate_hard(s_est_flat)
+        else:
+            if verbose: print("   Using soft LLRs for demodulation.")
             llrs = self.qpsk.demodulate_soft(s_est_flat, noise_var)
-            received_bits_hard = (llrs < 0).astype(int)
-        
-        if verbose: 
-            print(f"   Generated {len(received_bits_hard)} coded bits.")
+            # convert LLR->hard: sign convention in encoding uses llr<0 -> bit=1 in FSORx earlier;
+            # encodingRunner used QPSK.demodulate_hard for generating tx coded bits, so we'll use llr threshold to produce bits for hard-LDPC decode path.
+            received_bits = (llrs < 0).astype(int)
 
-            # === FIX 2 HERE ===
-            # Diagnostic: Compare transmitted vs received coded bits
-            if verbose and len(tx_signals) > 0:
-                # Get transmitted coded bits (before pilots)
-                tx_coded_bits_list = []
-                for mode_key in self.spatial_modes:
-                    # Get the original transmitted symbols
-                    mode_symbols_original = tx_signals[mode_key]['symbols']
-
-                    # *** APPLIED FIX ***
-                    # 1. Truncate original TX symbols to match what receiver processed
-                    mode_symbols_truncated = mode_symbols_original[:total_rx_symbols]
-
-                    # 2. Apply the correct data_mask (which is total_rx_symbols long)
-                    mode_data_symbols = mode_symbols_truncated[data_mask][:min_data_len]
-                    
-                    # Demodulate to bits
-                    mode_bits = self.qpsk.demodulate_hard(mode_data_symbols)
-                    tx_coded_bits_list.append(mode_bits)
-                tx_coded_bits = np.concatenate(tx_coded_bits_list)
-                
-                # Compare with received
-                compare_len_coded = min(len(tx_coded_bits), len(received_bits_hard))
-                coded_bit_errors = np.sum(tx_coded_bits[:compare_len_coded] != received_bits_hard[:compare_len_coded])
-                coded_ber = coded_bit_errors / compare_len_coded if compare_len_coded > 0 else 0
-                print(f"   Coded bits comparison: {coded_bit_errors}/{compare_len_coded} errors (BER: {coded_ber:.6f})")
-            # === END FIX 2 ===
-
-
-        # 7. Decoding
-        if verbose: print("\n7. LDPC Decoding...")
-        
-        n_ldpc = self.ldpc.n # e.g., 1024
-        k_ldpc = self.ldpc.k # e.g., 819
-        
-        num_codewords_full = len(received_bits_hard) // n_ldpc
-        remaining_bits = len(received_bits_hard) % n_ldpc
-        
         if verbose:
-            print(f"   Received coded bits: {len(received_bits_hard)}")
-            print(f"   Full codewords: {num_codewords_full}, Remaining bits: {remaining_bits}")
-        
-        decoded_bits_list = []
+            print(f"   Demodulated coded bits: {len(received_bits)}")
 
-        # 1. Decode all the full codewords
-        if num_codewords_full > 0:
-            trunc_len = num_codewords_full * n_ldpc
-            full_blocks = received_bits_hard[:trunc_len]
-            
-            # === FIX 3 HERE ===
-            # Diagnostic: Check syndromes before decoding
-            if verbose and len(tx_signals) > 0:
-                # Get transmitted coded bits for comparison
-                tx_coded_bits_list = []
-                for mode_key in self.spatial_modes:
-                    # Get the original transmitted symbols
-                    mode_symbols_original = tx_signals[mode_key]['symbols']
-
-                    # *** APPLIED FIX ***
-                    # 1. Truncate original TX symbols to match what receiver processed
-                    mode_symbols_truncated = mode_symbols_original[:total_rx_symbols]
-
-                    # 2. Apply the correct data_mask (which is total_rx_symbols long)
-                    mode_data_symbols = mode_symbols_truncated[data_mask][:min_data_len]
-                    
-                    mode_bits = self.qpsk.demodulate_hard(mode_data_symbols)
-                    tx_coded_bits_list.append(mode_bits)
-                tx_coded_bits = np.concatenate(tx_coded_bits_list)
-                
-                tx_coded_trunc = tx_coded_bits[:trunc_len]
-                
-                # Check syndromes for each codeword
-                syndromes_before = []
-                for i in range(num_codewords_full):
-                    rx_block = full_blocks[i*n_ldpc:(i+1)*n_ldpc]
-                    tx_block = tx_coded_trunc[i*n_ldpc:(i+1)*n_ldpc]
-                    rx_syndrome = np.sum(np.dot(self.ldpc.H, rx_block) % 2)
-                    tx_syndrome = np.sum(np.dot(self.ldpc.H, tx_block) % 2)
-                    syndromes_before.append((rx_syndrome, tx_syndrome))
-                    
-                    # Check if blocks match
-                    block_errors = np.sum(rx_block != tx_block)
-                    if block_errors > 0:
-                        print(f"   Codeword {i}: {block_errors} bit errors, RX syndrome={rx_syndrome}, TX syndrome={tx_syndrome}")
-                
-                if all(s[0] == 0 and s[1] == 0 for s in syndromes_before):
-                    print(f"   All {num_codewords_full} codewords have zero syndrome (perfect)")
-            # === END FIX 3 ===
-            
-            decoded_bits_list.append(self.ldpc.decode_simple(full_blocks))
-            
-            # Diagnostic: Compare decoded bits from perfect coded bits vs received coded bits
-            if verbose and len(tx_signals) > 0:
-                decoded_from_perfect = self.ldpc.decode_simple(tx_coded_trunc)
-                decoded_from_received = decoded_bits_list[0]
-                
-                compare_len_decoded = min(len(decoded_from_perfect), len(decoded_from_received))
-                if compare_len_decoded > 0:
-                    decoded_errors = np.sum(decoded_from_perfect[:compare_len_decoded] != decoded_from_received[:compare_len_decoded])
-                    if decoded_errors > 0:
-                        print(f"   WARNING: Decoder produces {decoded_errors} errors when comparing perfect vs received coded bits")
-                        print(f"   This suggests decoder H matrix mismatch or decoder bug")
-                    else:
-                        print(f"   Decoder produces identical output from perfect and received coded bits")
-                
-                # Store tx_coded_trunc for later diagnostic
-                self._tx_coded_bits_diag = tx_coded_trunc
-            
-        # 2. Pad and decode the final, partial codeword
-        if remaining_bits > k_ldpc: 
-            print(f"Warning: Received partial codeword ({remaining_bits} bits). Padding to {n_ldpc} with zeros.")
-            pad_len = n_ldpc - remaining_bits
-            partial_block = received_bits_hard[num_codewords_full * n_ldpc:]
-            padded_block = np.concatenate([partial_block, np.zeros(pad_len, dtype=int)])
-            decoded_bits_list.append(self.ldpc.decode_simple(padded_block))
-            
-        elif remaining_bits > 0:
-            print(f"Warning: Discarding {remaining_bits} trailing bits, insufficient for a codeword.")
-
-        if not decoded_bits_list:
-            print("Error: No full LDPC codewords to decode.")
-            decoded_bits = np.array([], dtype=int)
+        # 7) LDPC decode (BP if LLRs available else hard)
+        if verbose: print("7) LDPC decoding")
+        decoded_info_bits = np.array([], dtype=int)
+        # prefer BP decode if using soft LLRs
+        if noise_var >= IDEAL_THRESHOLD:
+            # Use decode_bp on llrs if available (we have llrs above)
+            try:
+                decoded_info_bits = self.ldpc.decode_bp(llrs)
+                if verbose:
+                    print(f"   Decoded info bits (BP): {len(decoded_info_bits)}")
+            except Exception as e:
+                warnings.warn(f"BP decode failed: {e}; falling back to hard decode.")
+                decoded_info_bits = self.ldpc.decode_hard(received_bits)
         else:
-            decoded_bits = np.concatenate(decoded_bits_list)
-             
-        if verbose: print(f"   Decoded {len(decoded_bits)} information bits.")
+            try:
+                decoded_info_bits = self.ldpc.decode_hard(received_bits)
+                if verbose:
+                    print(f"   Decoded info bits (hard): {len(decoded_info_bits)}")
+            except Exception as e:
+                warnings.warn(f"Hard LDPC decode failed: {e}")
+                decoded_info_bits = np.array([], dtype=int)
 
-        # 8. Performance Analysis (BER)
-        if verbose: print("\n8. Performance Analysis...")
-        
-        len_original = len(original_data_bits)
-        len_recovered = len(decoded_bits)
-        
-        # Diagnostic: Check if original_data_bits matches what was actually encoded
-        if verbose and len(tx_signals) > 0 and hasattr(self, '_tx_coded_bits_diag'):
-            decoded_from_perfect = self.ldpc.decode_simple(self._tx_coded_bits_diag)
-            perfect_errors = np.sum(original_data_bits[:min(len(original_data_bits), len(decoded_from_perfect))] != decoded_from_perfect[:min(len(original_data_bits), len(decoded_from_perfect))])
-            print(f"   Diagnostic: Errors when comparing original_data_bits to decoded_from_perfect: {perfect_errors}")
-            if perfect_errors > 0:
-                print(f"   ✗ CRITICAL: original_data_bits does NOT match what was actually encoded!")
-                print(f"   First 20 original:      {original_data_bits[:20]}")
-                print(f"   First 20 decoded_perf:  {decoded_from_perfect[:20]}")
-                print(f"   This explains the BER mismatch!")
-            else:
-                print(f"   ✓ original_data_bits matches decoded_from_perfect")
-        
-        # Find the minimum length to compare
-        compare_len = min(len_original, len_recovered)
-        
-        if compare_len == 0 and len_original > 0:
-            print("Error: No bits recovered for comparison.")
-            bit_errors = len_original # Count all as errors
+        # 8) BER and metrics
+        if verbose: print("8) Performance metrics (BER)")
+        orig = np.asarray(original_data_bits, dtype=int)
+        L_orig = len(orig)
+        L_rec = len(decoded_info_bits)
+        compare_len = min(L_orig, L_rec)
+        if compare_len == 0 and L_orig > 0:
+            bit_errors = L_orig
             ber = 1.0
-            len_mismatch_errors = len_original
-        elif len_original == 0:
-            print("Warning: No original bits to compare against.")
-            bit_errors = 0
-            ber = 0.0
-            len_mismatch_errors = 0
         else:
-            # Trim both arrays to the minimum length
-            trimmed_original = original_data_bits[:compare_len]
-            trimmed_recovered = decoded_bits[:compare_len]
-            
-            # 1. Calculate errors in the common block
-            bit_errors_common = np.sum(trimmed_original != trimmed_recovered)
-            
-            # 2. Add errors for any bits that were completely lost (length mismatch)
-            len_mismatch_errors = abs(len_original - len_recovered)
-            
-            # 3. Total errors
-            bit_errors = bit_errors_common + len_mismatch_errors
-            
-            # 4. BER is total errors divided by the *original* number of bits
-            ber = bit_errors / len_original
+            trimmed_orig = orig[:compare_len]
+            trimmed_rec = decoded_info_bits[:compare_len]
+            bit_errors_common = np.sum(trimmed_orig != trimmed_rec) if compare_len > 0 else 0
+            # count length mismatch as errors
+            len_mismatch = abs(L_orig - L_rec)
+            bit_errors = bit_errors_common + len_mismatch
+            ber = bit_errors / L_orig if L_orig > 0 else 0.0
 
+        # store metrics
         self.metrics = {
-            'H_est': H_est,
-            'noise_var': noise_var,
-            'bit_errors': bit_errors,
-            'total_bits': len_original, # Report what we *should* have received
-            'ber': ber
+            "H_est": H_est,
+            "noise_var": noise_var,
+            "bit_errors": int(bit_errors),
+            "total_bits": int(L_orig),
+            "ber": float(ber),
+            "n_data_symbols": int(N_data),
+            "n_modes": int(self.n_modes),
+            "cond_H": float(np.linalg.cond(H_est))
         }
+
         if verbose:
-             print(f"   Original Info Bits: {len_original}")
-             print(f"   Recovered Info Bits: {len_recovered}")
-             print(f"   Compared Bits: {compare_len}")
-             print(f"   Bit Errors: {bit_errors} (incl. {len_mismatch_errors} from length mismatch)")
-             print(f"   BER: {ber:.2e}")
+            print(f"   Original bits: {L_orig}, Decoded bits: {L_rec}, Errors: {bit_errors}, BER={ber:.3e}")
+            print("=" * 72)
 
-        if verbose: print("\n" + "="*70)
+        return decoded_info_bits, self.metrics
 
-        # Return the recovered bits for potential further analysis
-        return decoded_bits, self.metrics
+
+# -------------------------------------------------------
+# Example helper (diagnostic plotting)
+# -------------------------------------------------------
+def plot_constellation(rx_symbols, title="Received Constellation"):
+    plt.figure(figsize=(5, 5))
+    plt.plot(rx_symbols.real, rx_symbols.imag, ".", alpha=0.6)
+    plt.axhline(0, color="grey"); plt.axvline(0, color="grey")
+    plt.title(title); plt.xlabel("I"); plt.ylabel("Q"); plt.axis("equal")
+    plt.grid(True)
+    plt.show()
+
+
+# ---------------------------
+# If module run directly, provide a small sanity check sketch (no I/O)
+# ---------------------------
+if __name__ == "__main__":
+    print("")

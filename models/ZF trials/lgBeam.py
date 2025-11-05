@@ -1,244 +1,193 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.special import genlaguerre, factorial
+from scipy.special import factorial, eval_genlaguerre
 import os
 
-# --- Simulation Parameters ---
-# These are now defined in the __main__ block (see Improvement 4)
-# to make the script reusable as a module.
-
+_trapezoid = getattr(np, "trapezoid", np.trapz)
 
 class LaguerreGaussianBeam:
     def __init__(self, p, l, wavelength, w0):
-        """
-        Initializes the Laguerre-Gaussian beam parameters based on
-        canonical formulations.
-        
-        References:
-        - Andrews & Phillips, "Laser Beam Propagation through Random Media" (2005)
-        - Siegman, "Lasers" (1986)
-        - Beijersbergen et al., "Astigmatic laser mode converters and transfer of orbital angular momentum" (1993)
-        
-        Parameters:
-        -----------
-        p : int
-            Radial index (number of radial nodes)
-        l : int
-            Azimuthal index (OAM quantum number, can be positive or negative)
-        wavelength : float
-            Optical wavelength [m]
-        w0 : float
-            Beam waist radius at z=0 [m] (1/e^2 intensity radius)
-        """
+
         if p < 0:
             raise ValueError(f"Radial index p must be non-negative, got p={p}")
         
         self.p = p
         self.l = l
         self.wavelength = wavelength
-        self.w0 = w0  # Fundamental Gaussian waist parameter
+        self.w0 = w0 
         self.k = 2 * np.pi / wavelength
-
-        # M-squared factor [Ref: Siegman, 1986, Eq. 13.4-1]
-        # For LG modes: M² = (2p + |l| + 1)
         self.M_squared = 2 * p + abs(l) + 1
-        
-        # Effective Rayleigh range for the M² beam [Ref: Andrews & Phillips, 2005, Eq. 4.40]
-        # CRITICAL: z_R = z₀/M² where z₀ = πw₀²/λ is the fundamental Rayleigh range
-        # Since divergence scales with M² (θ_eff = M²·θ₀), the collimation distance
-        # scales inversely: z_R = z₀/M². This ensures w(z) = w₀√(1+(z/z_R)²) holds.
-        # See Siegman (1986) M² formalism: all Gaussian formulas work when z_R is scaled.
-        z0_fundamental = (np.pi * w0**2) / wavelength
-        self.z_R = z0_fundamental / self.M_squared
-        
-        # Normalization constant for orthonormal LG modes [Ref: A&P2005, Eq. 4.35]
-        # This ensures ∫∫ |E|² dA = 1 for unit power
-        # Formula: C_norm = sqrt(2 * factorial(p) / (π * factorial(p + |l|)))
-        # Note: factorial(0) = 1, so this formula works correctly for all cases including p=0, l=0
+        self.z0_fundamental = (np.pi * w0**2) / wavelength
+        self.z_R = self.z0_fundamental / self.M_squared
         self.C_norm = np.sqrt(2.0 * factorial(p) / (np.pi * factorial(p + abs(l))))
 
     def beam_waist(self, z):
-        """
-        Calculates the z-dependent Gaussian spot size parameter w(z).
-        
-        For LG modes, the beam waist evolution follows the universal formula:
-        w(z) = w₀ * sqrt(1 + (z/z_R)²)
-        
-        CRITICAL: z_R here is the EFFECTIVE Rayleigh range: z_R = z₀/M²
-        where z₀ = πw₀²/λ is the fundamental Rayleigh range.
-        This ensures the formula correctly predicts divergence for M² > 1 beams.
-        
-        References:
-        - Siegman (1986), Eq. 16.7-1 (M² formalism)
-        - Andrews & Phillips (2005), Eq. 4.37
-        """
-        return self.w0 * np.sqrt(1 + (z / self.z_R) ** 2)
+        return self.w0 * np.sqrt(1 + ((self.M_squared * z / self.z0_fundamental) ** 2))
 
     def radius_of_curvature(self, z):
-        """
-        Calculates the z-dependent radius of curvature R(z) of the wavefront.
-        
-        For Gaussian/LG beams: R(z) = z * (1 + (z_R/z)²)
-        At z=0, R→∞ (plane wavefront)
-        At z=z_R, R=2z_R (minimum curvature)
-        
-        References:
-        - Siegman (1986), Eq. 16.7-2
-        - Andrews & Phillips (2005), Eq. 4.38
-        
-        Parameters:
-        -----------
-        z : float
-            Propagation distance [m]
-        
-        Returns:
-        --------
-        R_z : float
-            Radius of curvature [m] (positive for diverging beam)
-        """
-        if abs(z) < 1e-12:
-            return np.inf  # Plane wave at z=0
-        return z * (1 + (self.z_R / z) ** 2)
+        z = np.asarray(z)
+        R_z = np.full_like(z, np.inf, dtype=float)
+        nonzero_mask = np.abs(z) >= 1e-12
+        R_z[nonzero_mask] = z[nonzero_mask] * (1 + (self.z_R / z[nonzero_mask]) ** 2)
+        if np.ndim(z) == 0:
+            return float(R_z)
+        return R_z
 
     def gouy_phase(self, z):
-        """
-        Calculates the z-dependent Gouy phase Psi(z).
-        
-        For LG modes, the Gouy phase is: ψ(z) = (2p + |l| + 1) * arctan(z/z_R)
-        This is equivalent to M² * arctan(z/z_R) since M² = 2p + |l| + 1
-        
-        References:
-        - Andrews & Phillips (2005), Eq. 4.36
-        - Siegman (1986), Sec. 16.3
-        """
-        return self.M_squared * np.arctan(z / self.z_R)
+        return self.M_squared * np.arctan(z / self.z0_fundamental)
 
-    # IMPROVEMENT 3: Use @property for derived attributes
-    # This is now accessed as 'beam.effective_divergence_angle'
     @property
     def effective_divergence_angle(self):
-        """
-        Returns the fundamental (theta_0) and effective (Theta) far-field divergence angles.
-        
-        The divergence angle scales with M²:
-        - θ₀ = λ/(πw₀): Fundamental Gaussian divergence
-        - θ_eff = M² * θ₀: Effective divergence for LG mode
-        
-        References:
-        - Siegman (1986), Eq. 16.7-3
-        - Andrews & Phillips (2005), Eq. 4.39
-        
-        Returns:
-        --------
-        theta_0 : float
-            Fundamental divergence angle [rad]
-        theta_eff : float
-            Effective divergence angle [rad] (scaled by M²)
-        """
         theta_0 = self.wavelength / (np.pi * self.w0)
         theta_eff = self.M_squared * theta_0
         return theta_0, theta_eff
 
-    # IMPROVEMENT 3: Use @property for derived attributes
-    # This is now accessed as 'beam.group_velocity_ratio'
-    @property
-    def group_velocity_ratio(self):
-        """
-        Returns the group velocity ratio (v_g / c) for the mode.
-        """
-        return 1.0 / (1.0 + self.M_squared / (2.0 * (self.k * self.w0)**2))
 
-    def generate_beam_field(self, r, phi, z):
-        """
-        Generates the complex electric field E(r, phi, z) based on the full
-        analytical solution for Laguerre-Gaussian beams.
+    def generate_beam_field(self, r, phi, z, P_tx_watts=1.0, 
+                           laser_linewidth_kHz=None, timing_jitter_ps=None,
+                           tx_aperture_radius=None, beam_tilt_x_rad=0.0, beam_tilt_y_rad=0.0,
+                           phase_noise_samples=None, symbol_time_s=None):
+        if np.ndim(z) != 0:
+            raise ValueError("generate_beam_field expects scalar z. "
+                           "For multiple z values, use a loop or vectorized wrapper.")
+        z = float(z)
+
+        r = np.asarray(r)
+        phi = np.asarray(phi)
+        try:
+            r, phi = np.broadcast_arrays(r, phi)
+        except ValueError:
+            raise ValueError("r and phi must be broadcastable to the same shape")
         
-        The field expression follows the standard form:
-        E(r,φ,z) = C_norm * (w₀/w(z)) * (√2 r/w(z))^|l| * L_p^|l|(2r²/w²) 
-                   * exp(-r²/w²) * exp(-ilφ) * exp(-ikr²/(2R)) 
-                   * exp(-i(2p+|l|+1)ψ) * exp(ikz)
-        
-        References:
-        - Andrews & Phillips (2005), Eq. 4.34
-        - Beijersbergen et al. (1993)
-        - Siegman (1986), Sec. 16.4
-        
-        Parameters:
-        -----------
-        r : array_like
-            Radial coordinate [m]
-        phi : array_like
-            Azimuthal angle [rad]
-        z : float
-            Propagation distance [m]
-        
-        Returns:
-        --------
-        field : array_like
-            Complex electric field [V/m] (normalized for unit power)
-        """
-        # Get z-dependent parameters
         w_z = self.beam_waist(z)
-        R_z = self.radius_of_curvature(z)
-        psi_z = self.gouy_phase(z)
+        R_z = self.radius_of_curvature(z)  
+        psi_z = self.gouy_phase(z)  
+        arg = 2 * r**2 / w_z**2
+        L_p_l = eval_genlaguerre(self.p, abs(self.l), arg)
+        power_scale = np.sqrt(P_tx_watts) if P_tx_watts > 0 else 0.0
+        amplitude_factor = self.C_norm * (1.0 / w_z) * power_scale
 
-        # Generalized Laguerre polynomial L_p^|l|(2r²/w²)
-        # Note: genlaguerre(p, |l|) gives the correct polynomial
-        L_p_l = genlaguerre(self.p, abs(self.l))(2 * r**2 / w_z**2)
-
-        # --- Assemble Field Components [Ref: A&P2005, Eq. 4.34] ---
-
-        # Amplitude decay and normalization
-        # CORRECTED: Standard form uses (w₀/w(z)) factor for amplitude scaling
-        # The normalization constant C_norm ensures orthonormality
-        amplitude_factor = self.C_norm * (self.w0 / w_z)
-        
-        # Radial profile (Gaussian * Laguerre * r^|l|)
-        # Standard form: (√2 r/w(z))^|l| * L_p^|l|(2r²/w²) * exp(-r²/w²)
         radial_factor = (
             (np.sqrt(2) * r / w_z) ** abs(self.l) * L_p_l * np.exp(-(r**2) / w_z**2)
         )
-        
-        # Azimuthal (OAM) helical phase: exp(-ilφ)
-        # This gives the beam its orbital angular momentum
+        aperture_mask = None
+        if tx_aperture_radius is not None:
+            aperture_mask = (r <= tx_aperture_radius).astype(float)
+        x = r * np.cos(phi)
+        y = r * np.sin(phi)
+        steering_phase = self.k * (x * beam_tilt_x_rad + y * beam_tilt_y_rad)
         azimuthal_factor = np.exp(-1j * self.l * phi)
-
-        # Phase from wavefront radius of curvature: exp(-ikr²/(2R))
-        # At z=0, R→∞, so this term is zero
         if np.isinf(R_z):
-            curvature_phase = 0  # Plane wave at z=0
+            curvature_factor = 1.0 
         else:
             curvature_phase = -1j * self.k * r**2 / (2 * R_z)
-
-        # Gouy phase term: exp(-i(2p+|l|+1)ψ) = exp(-i*M²*ψ)
-        # This accounts for the phase shift through focus
+            curvature_factor = np.exp(curvature_phase)
         gouy_phase_term = np.exp(-1j * psi_z)
 
-        # Carrier propagation phase: exp(ikz)
-        # Standard plane wave phase term
-        propagation_phase = np.exp(1j * self.k * z)
+        phase_noise = 0.0
+        if phase_noise_samples is not None:
 
-        # Total complex field (all terms multiplied)
+            if np.ndim(phase_noise_samples) > 0:
+                raise ValueError("generate_beam_field expects scalar phase_noise_samples for single-symbol field. "
+                               "Use generate_phase_noise_sequence() externally and pass individual values.")
+            phase_noise = float(phase_noise_samples)
+        elif laser_linewidth_kHz is not None and laser_linewidth_kHz > 0:
+            if symbol_time_s is None:
+                raise ValueError("symbol_time_s required when generating phase noise on-the-fly. "
+                               "Use generate_phase_noise_sequence() externally instead.")
+
+            delta_nu = laser_linewidth_kHz * 1e3  
+            sigma = np.sqrt(2 * np.pi * delta_nu * symbol_time_s)
+            phase_noise = np.random.normal(0, sigma)
+        timing_jitter_phase = 0.0
+        if timing_jitter_ps is not None and timing_jitter_ps > 0:
+            f_carrier = 3e8 / self.wavelength  # Hz
+            jitter_phase_error = 2 * np.pi * timing_jitter_ps * 1e-12 * f_carrier
+            timing_jitter_phase = np.random.normal(0, jitter_phase_error)
+        
+        propagation_phase = np.exp(1j * (self.k * z + phase_noise + timing_jitter_phase))
+
         field = (
             amplitude_factor
             * radial_factor
             * azimuthal_factor
-            * np.exp(curvature_phase)
+            * curvature_factor
+            * np.exp(1j * steering_phase) 
             * gouy_phase_term
             * propagation_phase
         )
+        
+        if aperture_mask is not None:
+            field = field * aperture_mask
 
         return field
 
-    def calculate_intensity(self, r, phi, z):
-        """
-        Calculates the intensity (magnitude-squared) of the field.
-        """
-        field = self.generate_beam_field(r, phi, z)
+    def calculate_intensity(self, r, phi, z, P_tx_watts=1.0, 
+                           laser_linewidth_kHz=None, timing_jitter_ps=None,
+                           tx_aperture_radius=None, beam_tilt_x_rad=0.0, beam_tilt_y_rad=0.0,
+                           phase_noise_samples=None, symbol_time_s=None):
+
+        field = self.generate_beam_field(r, phi, z, P_tx_watts, laser_linewidth_kHz,
+                                        timing_jitter_ps, tx_aperture_radius,
+                                        beam_tilt_x_rad, beam_tilt_y_rad, 
+                                        phase_noise_samples, symbol_time_s)
         return np.abs(field) ** 2
+    
+    def generate_phase_noise_sequence(self, num_symbols, symbol_time_s, laser_linewidth_kHz, seed=None):
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = np.random.default_rng()
+        
+        if laser_linewidth_kHz is None or laser_linewidth_kHz <= 0:
+            return np.zeros(num_symbols)
+        
+        delta_nu = laser_linewidth_kHz * 1e3 
+        phase_variance = 2 * np.pi * delta_nu * symbol_time_s
+        
+        phase_increments = rng.normal(0, np.sqrt(phase_variance), num_symbols)
+        phase_noise = np.cumsum(phase_increments)
+        
+        return phase_noise
+    
+    def calculate_tx_aperture_loss(self, tx_aperture_radius, r_max_factor=8.0, n_r=5000):
+        if tx_aperture_radius is None or tx_aperture_radius <= 0:
+            return 1.0
+        
+        r_max = max(tx_aperture_radius * r_max_factor, self.w0 * r_max_factor)
+        r_array = np.linspace(0, r_max, n_r)
+        intensity = self.calculate_intensity(r_array, 0, 0)
+        
+        integrand = intensity * 2 * np.pi * r_array
+        total_power = _trapezoid(integrand, r_array)
+        
+        r_aperture = r_array[r_array <= tx_aperture_radius]
+        if len(r_aperture) == 0:
+            return 0.0
+        
+        aperture_idx = len(r_aperture)
+        aperture_power = _trapezoid(integrand[:aperture_idx], r_array[:aperture_idx])
+        
+        transmission = aperture_power / total_power if total_power > 0 else 0.0
+        return transmission
+
+    def overlap_with(self, other, r_max_factor=6.0, n_r=800, n_phi=360):
+        r_max = max(self.w0, other.w0) * r_max_factor
+        r = np.linspace(0.0, r_max, n_r)
+        phi = np.linspace(0.0, 2*np.pi, n_phi, endpoint=False)
+        R, PHI = np.meshgrid(r, phi, indexing='xy') 
+        
+        E1 = self.generate_beam_field(R, PHI, 0.0, P_tx_watts=1.0)
+        E2 = other.generate_beam_field(R, PHI, 0.0, P_tx_watts=1.0)
+        
+        integrand = np.conjugate(E1) * E2 * R
+        
+        int_over_phi = _trapezoid(integrand, phi, axis=0)
+        overlap = _trapezoid(int_over_phi, r)
+        
+        return complex(overlap)
 
     def get_beam_parameters(self, z):
-        """Helper function to return a dictionary of parameters at z."""
         return {
             "z": z,
             "w_z": self.beam_waist(z),
@@ -248,7 +197,6 @@ class LaguerreGaussianBeam:
         }
 
     def propagation_summary(self, z_distances):
-        """Prints a formatted table of beam parameters vs. distance."""
         print(f"\nPropagation Summary for LG_{self.p}^{self.l} beam:")
         print("Distance (m) | w(z) (mm) | R(z) (m) | Gouy Phase (rad) | w(z)/w0")
         print("-" * 65)
@@ -265,37 +213,74 @@ class LaguerreGaussianBeam:
             )
 
     def __str__(self):
-        """String representation for printing the beam object."""
         return (
             f"LG_{self.p}^{self.l} beam (λ={self.wavelength * 1e9:.0f}nm, "
-            f"w0={self.w0 * 1e3:.1f}mm, z_R={self.z_R:.2f}m, M²={self.M_squared})"
+            f"w0={self.w0 * 1e3:.1f}mm, z_R={self.z_R:g}m, M²={self.M_squared})"
         )
 
+    def get_tx_parameters_summary(self, P_tx_watts=1.0, laser_linewidth_kHz=None, 
+                                  timing_jitter_ps=None, tx_aperture_radius=None,
+                                  beam_tilt_x_rad=0.0, beam_tilt_y_rad=0.0):
+        summary = {
+            'P_tx_watts': P_tx_watts,
+            'P_tx_dBm': 10 * np.log10(P_tx_watts * 1000) if P_tx_watts > 0 else -np.inf,
+            'laser_linewidth_kHz': laser_linewidth_kHz if laser_linewidth_kHz is not None else 0.0,
+            'timing_jitter_ps': timing_jitter_ps if timing_jitter_ps is not None else 0.0,
+            'tx_aperture_radius_m': tx_aperture_radius if tx_aperture_radius is not None else np.inf,
+            'beam_tilt_x_rad': beam_tilt_x_rad,
+            'beam_tilt_y_rad': beam_tilt_y_rad,
+            'beam_tilt_x_deg': np.degrees(beam_tilt_x_rad),
+            'beam_tilt_y_deg': np.degrees(beam_tilt_y_rad),
+        }
+        
+        if tx_aperture_radius is not None:
+            aperture_transmission = self.calculate_tx_aperture_loss(tx_aperture_radius)
+            summary['tx_aperture_transmission'] = aperture_transmission
+            summary['tx_aperture_loss_dB'] = -10 * np.log10(aperture_transmission) if aperture_transmission > 0 else np.inf
+        else:
+            summary['tx_aperture_transmission'] = 1.0
+            summary['tx_aperture_loss_dB'] = 0.0
+        
+        if laser_linewidth_kHz is not None and laser_linewidth_kHz > 0:
+
+            symbol_rate_Hz = 1e9  
+            symbol_time_s = 1.0 / symbol_rate_Hz
+            phase_noise_rms = np.sqrt(2 * np.pi * laser_linewidth_kHz * 1e3 * symbol_time_s)
+            summary['phase_noise_rms_rad'] = phase_noise_rms
+            summary['phase_noise_rms_deg'] = np.degrees(phase_noise_rms)
+            summary['phase_noise_symbol_rate_Hz'] = symbol_rate_Hz  # Document assumed rate
+            summary['phase_noise_note'] = 'ILLUSTRATIVE: Uses 1 GHz assumption. Use generate_phase_noise_sequence() with actual symbol_time_s for real calculations.'
+        else:
+            summary['phase_noise_rms_rad'] = 0.0
+            summary['phase_noise_rms_deg'] = 0.0
+            summary['phase_noise_symbol_rate_Hz'] = None
+            summary['phase_noise_note'] = None
+        
+        if timing_jitter_ps is not None and timing_jitter_ps > 0:
+            f_carrier = 3e8 / self.wavelength  # Hz
+            jitter_phase_error_rms = 2 * np.pi * timing_jitter_ps * 1e-12 * f_carrier
+            summary['timing_jitter_phase_rms_rad'] = jitter_phase_error_rms
+            summary['timing_jitter_phase_rms_deg'] = np.degrees(jitter_phase_error_rms)
+            summary['timing_jitter_phase_rms_cycles'] = jitter_phase_error_rms / (2 * np.pi)  # In cycles
+        else:
+            summary['timing_jitter_phase_rms_rad'] = 0.0
+            summary['timing_jitter_phase_rms_deg'] = 0.0
+            summary['timing_jitter_phase_rms_cycles'] = 0.0
+        
+        return summary
+    
     def __repr__(self):
-        """Official string representation."""
         return f"LaguerreGaussianBeam(p={self.p}, l={self.l}, λ={self.wavelength}, w0={self.w0})"
 
 
-# IMPROVEMENT 4: Plotting logic is now in its own function
 def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir="plots"):
-    """
-    Generates and plots the 4-panel analysis for a given LG beam.
-    
-    Args:
-        beam (LaguerreGaussianBeam): The beam object to analyze.
-        grid_size (int): The N x N grid size for 2D plots.
-        max_radius_mm (float): The extent of the 2D plots in mm.
-        save_fig (bool): Whether to save the figure to disk.
-        plot_dir (str): Directory to save the figure in.
-    """
-    
+
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle(f'Laguerre-Gaussian Beam Analysis: $LG_{{{beam.p}}}^{{{beam.l}}}$', 
                  fontsize=20, fontweight='bold')
     
-    # --- Panel 1: Lateral Profile at z=0 ---
     ax1 = axes[0, 0]
-    r_range = np.linspace(0, max_radius_mm * 1e-3, grid_size * 2) # Higher res for 1D
+    r_range = np.linspace(0, max_radius_mm * 1e-3, grid_size * 2) 
     intensity_profile = beam.calculate_intensity(r_range, 0, 0)
     
     ax1.plot(r_range * 1e3, intensity_profile, 'b-', linewidth=2)
@@ -307,23 +292,25 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     ax1.grid(True, alpha=0.3)
     ax1.legend()
     
-    # --- Setup for 2D Plots (Intensity & Phase) ---
     r_max_m = max_radius_mm * 1e-3
     x = np.linspace(-r_max_m, r_max_m, grid_size)
     y = np.linspace(-r_max_m, r_max_m, grid_size)
     X, Y = np.meshgrid(x, y)
     R = np.sqrt(X**2 + Y**2)
-    PHI = np.arctan2(Y, X) # 4-quadrant arctan is crucial
-
-    # IMPROVEMENT 1: Calculate the complex field ONCE
-    field_z0 = beam.generate_beam_field(R, PHI, 0)
+    PHI = np.arctan2(Y, X) 
     
-    # --- Panel 2: Intensity at z=0 ---
+    #===========================================
+    zField = 0
+    field_z0 = beam.generate_beam_field(R, PHI, zField)
+    #===========================================
+    
+    extent_mm = [x[0]*1e3, x[-1]*1e3, y[0]*1e3, y[-1]*1e3]
+    
     ax2 = axes[0, 1]
-    intensity_z0 = np.abs(field_z0) ** 2 # Derive intensity
+    intensity_z0 = np.abs(field_z0) ** 2 
     
     im2 = ax2.imshow(intensity_z0, 
-                     extent=[-max_radius_mm, max_radius_mm, -max_radius_mm, max_radius_mm],
+                     extent=extent_mm,
                      cmap='hot', origin='lower', interpolation='bilinear')
     ax2.set_xlabel('x [mm]')
     ax2.set_ylabel('y [mm]')
@@ -332,12 +319,11 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     cbar2 = plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
     cbar2.set_label('Intensity [a.u.]')
 
-    # --- Panel 3: Phase at z=0 ---
     ax3 = axes[1, 0]
-    phase_z0 = np.angle(field_z0) # Derive phase
+    phase_z0 = np.angle(field_z0) 
     
     im3 = ax3.imshow(phase_z0, 
-                     extent=[-max_radius_mm, max_radius_mm, -max_radius_mm, max_radius_mm],
+                     extent=extent_mm,
                      cmap='twilight', origin='lower', interpolation='bilinear',
                      vmin=-np.pi, vmax=np.pi)
     ax3.set_xlabel('x [mm]')
@@ -349,7 +335,7 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     cbar3.set_ticks([-np.pi, 0, np.pi])
     cbar3.set_ticklabels(['-π', '0', 'π'])
 
-    # --- Panel 4: Longitudinal Propagation ---
+
     ax_long = axes[1, 1]
     
     z_max = 3 * beam.z_R  
@@ -357,13 +343,12 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     num_r_steps = 200
     
     z_array = np.linspace(0, z_max, num_z_steps)
-    r_max_long = 3 * beam.beam_waist(z_max) # Plot 3x the final waist
+    r_max_long = 3 * beam.beam_waist(z_max)
     r_array = np.linspace(-r_max_long, r_max_long, num_r_steps)
     
-    # Create the longitudinal intensity map
+
     intensity_long = np.zeros((num_r_steps, num_z_steps))
     for i, z in enumerate(z_array):
-        # Calculate 1D intensity slice. phi=0 is arbitrary and fine.
         intensity_long[:, i] = beam.calculate_intensity(np.abs(r_array), 0, z)
     
     z_array_km = z_array / 1000
@@ -393,7 +378,6 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     plt.colorbar(im_long, ax=ax_long, label='Intensity [a.u.]', 
                  fraction=0.046, pad=0.04)
     
-    # --- Finalize and Show/Save Plot ---
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]) 
     
     if save_fig:
@@ -401,52 +385,83 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
         fig_name = f"lg_p{beam.p}_l{beam.l}_beam.png"
         save_path = os.path.join(plot_dir, fig_name)
         print(f"Saving figure to {save_path}")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight') # dpi=300 is good for screens
+        plt.savefig(save_path, dpi=300, bbox_inches='tight') 
     
     plt.show()
 
 
 
 def main():
-    """
-    Main driver script to initialize and analyze an LG beam.
-    """
-    # --- Define Simulation Parameters ---
+
     WAVELENGTH = 1550e-9  
     W0 = 25e-3           
     P_MODE = 0         
-    L_MODE = 2          
+    L_MODE = 1          
     GRID_SIZE = 200       
     MAX_RADIUS_MM = 75   
     SAVE_FIGURE = True  
     PLOT_DIR = "plots"   
 
-    # --- 1. Initialize Beam ---
+    print("\n")
     beam = LaguerreGaussianBeam(P_MODE, L_MODE, WAVELENGTH, W0)
-    
-    # --- 2. Print Console Summary ---
     print(f"Beam Definition: {beam}")
 
-    # Accessing properties (no '()')
     theta_0, theta_eff = beam.effective_divergence_angle
     print(f"Ideal Divergence (θ₀): {theta_0 * 1e6:.2f} µrad")
     print(f"Effective Divergence (Θ): {theta_eff * 1e6:.2f} µrad")
-
-    vg_ratio = beam.group_velocity_ratio
-    print(f"Group Velocity Ratio (v_g / c): {vg_ratio:.8f}")
+    print(f"Fundamental Rayleigh Range (z₀): {beam.z0_fundamental:.2f} m")
 
     params_at_zR = beam.get_beam_parameters(beam.z_R)
     print(f"\nParams at z=z_R ({beam.z_R:.1f}m):")
     print(f"  w(z_R) = {params_at_zR['w_z']*1e3:.2f} mm")
     print(f"  R(z_R) = {params_at_zR['R_z']:.2f} m")
 
-    z_list = [0, beam.z_R, 2 * beam.z_R, 3 * beam.z_R]
+    z_list = [0, beam.z_R, 2 * beam.z_R, 3 * beam.z_R, 1000, 1200]
     beam.propagation_summary(z_list)
     
-    # --- 3. Generate and Show Plots ---
 
+    
+
+    P_tx = 2.0  
+    laser_linewidth = 10.0
+    timing_jitter = 5.0 
+    tx_aperture = 50e-3  
+    tilt_x = np.radians(0.1) 
+    tilt_y = np.radians(0.0)
+    
+    tx_summary = beam.get_tx_parameters_summary(
+        P_tx_watts=P_tx,
+        laser_linewidth_kHz=laser_linewidth,
+        timing_jitter_ps=timing_jitter,
+        tx_aperture_radius=tx_aperture,
+        beam_tilt_x_rad=tilt_x,
+        beam_tilt_y_rad=tilt_y
+    )
+    
+    print(f"\nTransmitter Configuration:")
+    print(f"  Power: {P_tx:.1f} W ({tx_summary['P_tx_dBm']:.1f} dBm)")
+    print(f"  Laser Linewidth: {laser_linewidth:.1f} kHz")
+    print(f"    → Phase Noise RMS: {tx_summary['phase_noise_rms_deg']:.3f} deg")
+    print(f"  Timing Jitter: {timing_jitter:.1f} ps RMS")
+    print(f"    → Phase Error RMS: {tx_summary['timing_jitter_phase_rms_cycles']:.2f} cycles ({tx_summary['timing_jitter_phase_rms_deg']:.1f} deg)")
+    print(f"  TX Aperture: {tx_aperture*1e3:.1f} mm radius")
+    print(f"    → Transmission: {tx_summary['tx_aperture_transmission']*100:.2f}%")
+    print(f"    → Aperture Loss: {tx_summary['tx_aperture_loss_dB']:.3f} dB")
+    print(f"  Beam Tilt: ({tx_summary['beam_tilt_x_deg']:.3f}, {tx_summary['beam_tilt_y_deg']:.3f}) deg")
+    
+    num_symbols = 1000
+    symbol_rate = 1e9  # 1 GHz
+    symbol_time = 1.0 / symbol_rate
+    phase_noise_seq = beam.generate_phase_noise_sequence(
+        num_symbols, symbol_time, laser_linewidth, seed=42
+    )
+    print(f"\nPhase Noise Sequence (first 5 symbols):")
+    phase_noise_deg = phase_noise_seq[:5] * 180/np.pi
+    print(f"  [{', '.join(f'{x:.4f}' for x in phase_noise_deg)}] deg")
+    
     plot_beam_analysis(beam, GRID_SIZE, MAX_RADIUS_MM, SAVE_FIGURE, PLOT_DIR)
 
 
 if __name__ == "__main__":
     main()
+
