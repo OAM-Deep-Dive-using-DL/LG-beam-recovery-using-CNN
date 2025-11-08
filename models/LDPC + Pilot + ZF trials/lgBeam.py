@@ -385,7 +385,7 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
         fig_name = f"lg_p{beam.p}_l{beam.l}_beam.png"
         save_path = os.path.join(plot_dir, fig_name)
         print(f"Saving figure to {save_path}")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight') 
+        plt.savefig(save_path, dpi=600, bbox_inches='tight')  # IEEE compliance: 600 DPI 
     
     plt.show()
 

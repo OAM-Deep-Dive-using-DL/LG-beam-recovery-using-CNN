@@ -10,12 +10,16 @@ sys.path.insert(0, SCRIPT_DIR)
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
+from tqdm import tqdm
+from contextlib import redirect_stdout
+import io
+import argparse
 warnings.filterwarnings('ignore')
 
 # Import all modules
 try:
     from lgBeam import LaguerreGaussianBeam
-    from encoding import encodingRunner, QPSKModulator, SimplifiedLDPC, PilotHandler
+    from encoding import encodingRunner, QPSKModulator, PilotHandler
     from fsplAtmAttenuation import calculate_kim_attenuation, calculate_geometric_loss
     
     from turbulence import (AtmosphericTurbulence, 
@@ -42,7 +46,7 @@ class SimulationConfig:
     W0 = 25e-3           # [m]
     
     # --- Link Parameters ---
-    DISTANCE = 800      # [m]
+    DISTANCE = 1000      # [m]
     RECEIVER_DIAMETER = 0.3  # [m]
     P_TX_TOTAL_W = 1.0     # [W] – now used for scaling
     
@@ -50,10 +54,11 @@ class SimulationConfig:
     SPATIAL_MODES = [(0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4)]
     
     # --- Turbulence Parameters (TRUE IDEAL) ---
-    CN2 = 1e-18           # [m^(-2/3)] 
+    CN2 = 1e-17           # [m^(-2/3)] 
     L0 = 10.0           # [m]
     L0_INNER = 0.005    # [m]
     NUM_SCREENS = 15   
+    CN2_MODEL = "uniform"  # Horizontal path → uniform profile; set "hufnagel_valley" for vertical links
     
     # --- Weather Condition ---
     WEATHER = 'clear'    
@@ -67,16 +72,17 @@ class SimulationConfig:
     
     # --- Simulation Grid ---
     N_GRID = 512        # 512x512 is fast for a sanity check
-    OVERSAMPLING = 2    
+    OVERSAMPLING = 1    
     
     # --- Receiver Configuration (TRUE IDEAL) ---
-    EQ_METHOD = 'zf'    
+    EQ_METHOD = 'auto'  # Auto-select MMSE when H is small (more robust than ZF)
     ADD_NOISE = False   # Disable additive noise
-    SNR_DB = 50        # Set to a high dummy value
+    SNR_DB = 20        # Set to a high dummy value
     
     # --- Output ---
     PLOT_DIR = os.path.join(SCRIPT_DIR, "e2e_results_ideal") # New folder
-    DPI = 300
+    DPI = 600  # IEEE compliance (600 DPI for figures)
+    ENABLE_POWER_PROBE = True  # Toggle numerical power probe diagnostic
 
 # ============================================================================
 # NEW E2E SIMULATION (RECTIFIED)
@@ -140,17 +146,20 @@ def run_e2e_simulation(config):
     dA = delta**2
     tx_basis_fields = {}  # FIXED: Define dict here
     basis_energy = {}  # Per-mode energy for scaling
+    basis_scaling_factors = {}  # CRITICAL: Store scaling factors for RX reference fields
     for mode_key, beam in transmitter.lg_beams.items():
         E_basis = beam.generate_beam_field(R, PHI, 0)
         energy = np.sum(np.abs(E_basis)**2) * dA  # Unit symbol energy ~1
         basis_energy[mode_key] = energy
         # Scale basis so each mode contrib P_tx / n_modes when symbol=1
         scale = np.sqrt(cfg.P_TX_TOTAL_W / (n_modes * energy))
+        basis_scaling_factors[mode_key] = scale  # Store for receiver
         tx_basis_fields[mode_key] = E_basis * scale  # Now |sum basis *1|^2 dA = P_tx
     # FIXED: Validate total power
     E_tx_check = np.sum([tx_basis_fields[mode_key] for mode_key in cfg.SPATIAL_MODES], axis=0)
     total_power = np.sum(np.abs(E_tx_check)**2) * dA
     print(f"    Basis scaled for total TX power: {cfg.P_TX_TOTAL_W} W ({n_modes} modes) – verified: {total_power:.3f} W")
+    print(f"    Scaling factors stored for RX reference field matching")
 
     # 1e. Initialize Receiver
     print("[5] Initializing Receiver...")
@@ -159,7 +168,6 @@ def run_e2e_simulation(config):
         wavelength=cfg.WAVELENGTH,
         w0=cfg.W0,
         z_distance=cfg.DISTANCE,
-        fec_rate=cfg.FEC_RATE,
         pilot_handler=transmitter.pilot_handler,  # Share pilot handler!
         eq_method=cfg.EQ_METHOD,
         receiver_radius=(cfg.RECEIVER_DIAMETER / 2.0),
@@ -179,6 +187,15 @@ def run_e2e_simulation(config):
     tx_frame = transmitter.transmit(data_bits, verbose=True)
     tx_signals = tx_frame.tx_signals  # Extract dict from FSO_MDM_Frame object
     
+    # CRITICAL FIX: Set grid_info in tx_frame (receiver needs it for demultiplexing)
+    tx_frame.grid_info = grid_info
+    # CRITICAL FIX: Store basis scaling factors in tx_frame metadata for RX reference field scaling
+    if not hasattr(tx_frame, 'metadata') or tx_frame.metadata is None:
+        tx_frame.metadata = {}
+    tx_frame.metadata['basis_scaling_factors'] = basis_scaling_factors
+    tx_frame.metadata['basis_energy'] = basis_energy
+    # Store attenuation factor (will be set after calculation, see below)
+    
     # Get total number of symbols. Find the *minimum* length across all modes.
     symbol_lengths = [len(sig['symbols']) for sig in tx_signals.values()]  # FIXED: Use len(symbols)
     if not symbol_lengths or min(symbol_lengths) == 0:
@@ -186,11 +203,15 @@ def run_e2e_simulation(config):
          return None
          
     n_symbols = min(symbol_lengths)
-    pilot_pos = transmitter.pilot_handler.pilot_positions
+    # FIXED: Get pilot positions from tx_frame (PilotHandler doesn't have pilot_positions attribute)
+    # Pilot positions are stored per-mode in tx_signals[mode_key]["pilot_positions"]
+    first_mode = list(tx_signals.keys())[0]
+    pilot_pos = np.asarray(tx_signals[first_mode].get("pilot_positions", []), dtype=int)
     if n_symbols < len(pilot_pos):
         print(f"✗ ERROR: n_symbols={n_symbols} < pilots={len(pilot_pos)}. Increase N_INFO_BITS.")
         return None
     print(f"    (Simulation will truncate to minimum frame length: {n_symbols} symbols)")
+    print(f"    Pilot positions: {len(pilot_pos)} pilots per mode")
 
     # === 3. PHYSICAL CHANNEL ===
     print("\n" + "="*80)
@@ -202,15 +223,26 @@ def run_e2e_simulation(config):
     layers = create_multi_layer_screens(
         cfg.DISTANCE, cfg.NUM_SCREENS, 
         cfg.WAVELENGTH, cfg.CN2, 
-        cfg.L0, cfg.L0_INNER, verbose=False
+        cfg.L0, cfg.L0_INNER,
+        cn2_model=getattr(cfg, "CN2_MODEL", "hufnagel_valley"),
+        verbose=False
     )
     print(f"    Generated {len(layers)} screen layers.")
     
     # 3b. Calculate Attenuation Loss
     print("[2] Calculating Attenuation...")
-    # Use proper function from fsplAtmAttenuation.py: calculate_geometric_loss(beam, z, receiver_radius)
-    L_geo_dB, eta_geo = calculate_geometric_loss(max_m2_beam, cfg.DISTANCE, cfg.RECEIVER_DIAMETER / 2.0)
-    w_z_analytical = max_m2_beam.beam_waist(cfg.DISTANCE)
+    receiver_radius = cfg.RECEIVER_DIAMETER / 2.0
+    per_mode_eta = {}
+    per_mode_geo_db = {}
+    eta_sum = 0.0
+    for mode_key, beam in transmitter.lg_beams.items():
+        L_geo_dB_mode, eta_mode = calculate_geometric_loss(beam, cfg.DISTANCE, receiver_radius)
+        per_mode_eta[mode_key] = eta_mode
+        per_mode_geo_db[mode_key] = L_geo_dB_mode
+        eta_sum += eta_mode
+    eta_weighted = eta_sum / max(1, len(per_mode_eta))
+    best_mode = max(per_mode_eta, key=per_mode_eta.get)
+    worst_mode = min(per_mode_eta, key=per_mode_eta.get)
     
     # Use 23km visibility for 'clear' (Kim model)
     visibility_km = 23.0 
@@ -218,16 +250,49 @@ def run_e2e_simulation(config):
     L_atm_dB = alpha_dBkm * (cfg.DISTANCE / 1000.0)
     
     amplitude_loss = 10**(-L_atm_dB / 20.0) # Apply attenuation
-    coll_eff = eta_geo * (amplitude_loss ** 2)  # Total collection efficiency
+    coll_eff = eta_weighted * (amplitude_loss ** 2)  # Total collection efficiency
     P_rx_expected = cfg.P_TX_TOTAL_W * coll_eff
     print(f"    Atmospheric Loss: {L_atm_dB:.2f} dB (Amplitude factor: {amplitude_loss:.3f})")
-    print(f"    Geometric Loss: {L_geo_dB:.2f} dB (Collection Eff: {eta_geo*100:.1f}%)")
-    print(f"    Total P_rx expected: {P_rx_expected:.3f} W (eff: {coll_eff*100:.2f}%)")
+    avg_geo_loss_db = -10 * np.log10(max(eta_weighted, 1e-12))
+    print(f"    Geometric Loss (mode-weighted): {avg_geo_loss_db:.2f} dB (Avg Eff: {eta_weighted*100:.2f}%)")
+    print(f"      Best mode {best_mode}: {per_mode_eta[best_mode]*100:.1f}%   Worst mode {worst_mode}: {per_mode_eta[worst_mode]*100:.1f}%")
+    print(f"    Total P_rx expected: {P_rx_expected:.3f} W (eff incl. atm: {coll_eff*100:.2f}%)")
+    
+    # CRITICAL FIX: Store attenuation factor in tx_frame metadata for RX reference field matching
+    if not hasattr(tx_frame, 'metadata') or tx_frame.metadata is None:
+        tx_frame.metadata = {}
+    tx_frame.metadata['amplitude_loss'] = amplitude_loss
+    tx_frame.metadata['mode_collection_eff'] = per_mode_eta.copy()
+
+    # Aperture mask & area (reuse later)
+    aperture_mask = (grid_info['R'] <= cfg.RECEIVER_DIAMETER / 2.0).astype(float)
+    dA = grid_info['delta']**2
+
+    if getattr(cfg, "ENABLE_POWER_PROBE", True):
+        # Numerical probe: propagate unit symbol frame (all modes = 1) through same channel
+        E_tx_probe = np.zeros((cfg.N_GRID, cfg.N_GRID), dtype=complex)
+        for mode_key in cfg.SPATIAL_MODES:
+            E_tx_probe += tx_basis_fields[mode_key]
+        with redirect_stdout(io.StringIO()):
+            probe_result = apply_multi_layer_turbulence(
+                initial_field=E_tx_probe,
+                base_beam=max_m2_beam,
+                layers=layers,
+                total_distance=cfg.DISTANCE,
+                N=cfg.N_GRID,
+                oversampling=cfg.OVERSAMPLING,
+                L0=cfg.L0,
+                l0=cfg.L0_INNER,
+            )
+        E_rx_probe = probe_result['final_field'] * amplitude_loss * aperture_mask
+        P_rx_numeric = np.sum(np.abs(E_rx_probe) ** 2) * dA
+        tx_frame.metadata['numeric_power_probe_W'] = float(P_rx_numeric)
+        print(f"    Numerical P_rx (unit symbol sum): {P_rx_numeric:.3f} W (eff: {P_rx_numeric / cfg.P_TX_TOTAL_W * 100:.2f}%)")
+    else:
+        print("    Numerical P_rx probe: skipped (ENABLE_POWER_PROBE=False)")
     
     # 3c. Calculate Noise – FIXED: Per-symbol power probe
     print("[3] Calculating Noise Parameters...")
-    aperture_mask = (grid_info['R'] <= cfg.RECEIVER_DIAMETER / 2.0).astype(float)
-    dA = grid_info['delta']**2
     num_pixels_in_aperture = np.sum(aperture_mask)
     if num_pixels_in_aperture == 0: num_pixels_in_aperture = 1
     
@@ -236,12 +301,14 @@ def run_e2e_simulation(config):
         E_tx_probe = np.zeros((cfg.N_GRID, cfg.N_GRID), dtype=complex)
         for mode_key in cfg.SPATIAL_MODES:
             E_tx_probe += tx_basis_fields[mode_key]  # Scaled basis *1
-        result_probe = apply_multi_layer_turbulence(
-            initial_field=E_tx_probe,
-            base_beam=max_m2_beam, layers=layers, total_distance=cfg.DISTANCE,
-            N=cfg.N_GRID, oversampling=cfg.OVERSAMPLING,
-            L0=cfg.L0, l0=cfg.L0_INNER
-        )
+        # Suppress verbose turbulence output
+        with redirect_stdout(io.StringIO()):
+            result_probe = apply_multi_layer_turbulence(
+                initial_field=E_tx_probe,
+                base_beam=max_m2_beam, layers=layers, total_distance=cfg.DISTANCE,
+                N=cfg.N_GRID, oversampling=cfg.OVERSAMPLING,
+                L0=cfg.L0, l0=cfg.L0_INNER
+            )
         E_rx_probe = result_probe['final_field'] * amplitude_loss * aperture_mask
         
         power_per_symbol = np.sum(np.abs(E_rx_probe)**2) * dA  # Total for one symbol
@@ -263,34 +330,38 @@ def run_e2e_simulation(config):
         noise_std_per_pixel = 0.0
 
     # 3d. Loop over all symbols (PHYSICAL PROPAGATION)
-    print(f"[4] Propagating {n_symbols} symbols through channel... (This is slow!)")
+    print(f"[4] Propagating {n_symbols} symbols through channel...")
     
     E_rx_sequence = [] # This will store the list of 2D fields
     
     # Sample symbols for TX vis (average first 5 non-pilot or unit) – FIXED: Realistic avg
     sample_syms = np.ones(n_modes, dtype=complex)  # Fallback unit
     first_non_pilot = max(0, len(pilot_pos)) if len(pilot_pos) > 0 else 0
-    if first_non_pilot < 5 and first_non_pilot < n_symbols:
-        for i in range(min(5, n_symbols - first_non_pilot)):
-            idx = first_non_pilot + i
-            for j, mode_key in enumerate(cfg.SPATIAL_MODES):
-                sample_syms[j] += tx_signals[mode_key]['symbols'][idx]
-        sample_syms /= 5  # Avg
+    if first_non_pilot < n_symbols:
+        n_samples = min(5, n_symbols - first_non_pilot)
+        if n_samples > 0:
+            for i in range(n_samples):
+                idx = first_non_pilot + i
+                for j, mode_key in enumerate(cfg.SPATIAL_MODES):
+                    sample_syms[j] += tx_signals[mode_key]['symbols'][idx]
+            sample_syms /= (n_samples + 1)  # Avg (including initial ones)
     
-    for sym_idx in range(n_symbols): # Loop to the *minimum* length
+    # Use tqdm for progress bar, suppress turbulence verbose output
+    for sym_idx in tqdm(range(n_symbols), desc="Propagating symbols", unit="symbol"): # Loop to the *minimum* length
         # 1. Create the multiplexed field for this symbol – uses scaled basis
         E_tx_symbol = np.zeros((cfg.N_GRID, cfg.N_GRID), dtype=complex)
         for i, mode_key in enumerate(cfg.SPATIAL_MODES):
             symbol = tx_signals[mode_key]['symbols'][sym_idx]
             E_tx_symbol += tx_basis_fields[mode_key] * symbol
             
-        # 2. Propagate the *combined* field
-        result = apply_multi_layer_turbulence(
-            initial_field=E_tx_symbol,
-            base_beam=max_m2_beam, layers=layers, total_distance=cfg.DISTANCE,
-            N=cfg.N_GRID, oversampling=cfg.OVERSAMPLING,
-            L0=cfg.L0, l0=cfg.L0_INNER
-        )
+        # 2. Propagate the *combined* field (suppress verbose output)
+        with redirect_stdout(io.StringIO()):
+            result = apply_multi_layer_turbulence(
+                initial_field=E_tx_symbol,
+                base_beam=max_m2_beam, layers=layers, total_distance=cfg.DISTANCE,
+                N=cfg.N_GRID, oversampling=cfg.OVERSAMPLING,
+                L0=cfg.L0, l0=cfg.L0_INNER
+            )
         E_rx_turbulent = result['final_field']
         
         # 3. Apply Attenuation
@@ -311,9 +382,6 @@ def run_e2e_simulation(config):
         
         # 6. Store the final field
         E_rx_sequence.append(E_rx_final)
-        
-        if (sym_idx + 1) % 100 == 0 or sym_idx == n_symbols - 1:  # FIXED: Every 100
-            print(f"    ... propagated symbol {sym_idx + 1}/{n_symbols}")
             
     print("    ✓ Full frame propagated.")
     
@@ -329,11 +397,12 @@ def run_e2e_simulation(config):
     print("="*80)
     
     # Pass the *entire sequence of fields* to the receiver
+    # NOTE: tx_frame.grid_info is now set (line 183), so receiver can use it directly
+    # The receive_sequence() wrapper will use tx_frame if provided, or construct from grid_info+tx_signals
     recovered_bits, metrics = receiver.receive_sequence(
         E_rx_sequence=E_rx_sequence,
-        grid_info=grid_info,
-        tx_signals=tx_signals,
-        original_data_bits=data_bits,
+        tx_frame=tx_frame,  # Pass complete tx_frame (includes grid_info and tx_signals)
+        original_data_bits=data_bits,  # INFO bits (before LDPC encoding) for BER calculation
         verbose=True
     )
 
@@ -490,29 +559,96 @@ SYSTEM PERFORMANCE METRICS
     
     return fig
 
+
+def run_cn2_sweep(config_class, cn2_values, enable_power_probe=False, save_plots=False):
+    """
+    Sweep through a list of Cn² values and record BER / conditioning metrics.
+    """
+    print("\n" + "="*80)
+    print("CN² SWEEP: BEGIN")
+    print("="*80)
+
+    summary = []
+    for idx, cn2 in enumerate(cn2_values, start=1):
+        cfg = config_class()
+        cfg.CN2 = cn2
+        cfg.ENABLE_POWER_PROBE = enable_power_probe
+
+        print(f"\n--- Sweep {idx}/{len(cn2_values)}: CN² = {cn2:.2e} ---")
+        results = run_e2e_simulation(cfg)
+        metrics = results['metrics']
+        cond_h = metrics.get("cond_H", float(np.linalg.cond(metrics['H_est'])))
+        coded_ber = metrics.get("coded_ber")
+
+        summary.append({
+            "cn2": cn2,
+            "ber": metrics['ber'],
+            "bit_errors": metrics['bit_errors'],
+            "cond_H": cond_h,
+            "coded_ber": coded_ber
+        })
+
+        # Optional plot export per sweep step
+        if save_plots:
+            sweep_dir = os.path.join(cfg.PLOT_DIR, "cn2_sweep")
+            os.makedirs(sweep_dir, exist_ok=True)
+            plot_path = os.path.join(sweep_dir, f"cn2_{cn2:.2e}.png")
+            plot_e2e_results(results, save_path=plot_path)
+
+    print("\nSweep Summary:")
+    print(f"{'CN² (m^-2/3)':>14} | {'BER':>10} | {'Bit Err':>8} | {'cond(H)':>10} | {'Coded BER':>10}")
+    print("-"*70)
+    for row in summary:
+        coded_str = f"{row['coded_ber']:.3e}" if row['coded_ber'] is not None else "n/a"
+        print(f"{row['cn2']:.2e} | {row['ber']:.3e} | {row['bit_errors']:8d} | {row['cond_H']:.3e} | {coded_str:>10}")
+
+    print("\nCN² SWEEP: COMPLETE")
+    print("="*80)
+    return summary
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
 if __name__ == "__main__":
-    
-    # 1. Initialize Configuration
-    config = SimulationConfig()
-    
-    # --- Override config here for quick tests ---
-    #config.CN2 = 1e-20
-    #config.SNR_DB = 99
-    #config.N_GRID = 256  # Faster test
-    #config.NUM_SCREENS = 5
-    #config.N_INFO_BITS = 819 * 6  # Default already multiple
-    
-    # 2. Run end-to-end simulation
-    results = run_e2e_simulation(config)
-    
-    # 3. Plot results
-    if results:
-        save_file = os.path.join(config.PLOT_DIR, "e2e_simulation_results.png")
-        fig = plot_e2e_results(results, save_path=save_file)
-        plt.show()
+
+    parser = argparse.ArgumentParser(description="FSO-OAM End-to-End Simulation")
+    parser.add_argument(
+        "--cn2-sweep",
+        nargs="+",
+        type=float,
+        help="List of Cn² values (m^-2/3) to sweep. Example: --cn2-sweep 0 5e-19 1e-18"
+    )
+    parser.add_argument(
+        "--disable-power-probe",
+        action="store_true",
+        help="Skip the numerical power probe diagnostic to speed up runs."
+    )
+    parser.add_argument(
+        "--save-sweep-plots",
+        action="store_true",
+        help="When sweeping Cn², save plots for each operating point."
+    )
+    args = parser.parse_args()
+
+    if args.cn2_sweep:
+        cn2_values = args.cn2_sweep
+        run_cn2_sweep(
+            SimulationConfig,
+            cn2_values,
+            enable_power_probe=not args.disable_power_probe,
+            save_plots=args.save_sweep_plots
+        )
     else:
-        print("✗ Simulation failed to produce results.")
+        # Single-run path
+        config = SimulationConfig()
+        if args.disable_power_probe:
+            config.ENABLE_POWER_PROBE = False
+
+        results = run_e2e_simulation(config)
+        if results:
+            save_file = os.path.join(config.PLOT_DIR, "e2e_simulation_results.png")
+            fig = plot_e2e_results(results, save_path=save_file)
+            plt.show()
+        else:
+            print("✗ Simulation failed to produce results.")
