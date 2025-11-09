@@ -6,4 +6,5 @@ tqdm
 torch
 torchvision
 scikit-learn
-pyldpc>=0.7.9
+pyldpc
+

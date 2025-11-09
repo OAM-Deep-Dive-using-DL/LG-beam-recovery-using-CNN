@@ -46,18 +46,19 @@ class SimulationConfig:
     W0 = 25e-3           # [m]
     
     # --- Link Parameters ---
-    DISTANCE = 1000      # [m]
+    DISTANCE = 800      # [m]
     RECEIVER_DIAMETER = 0.3  # [m]
     P_TX_TOTAL_W = 1.0     # [W] – now used for scaling
     
     # --- Spatial Modes ---
-    SPATIAL_MODES = [(0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4)]
+    SPATIAL_MODES = [
+    (0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4), (1, -1), (1, 1)]
     
     # --- Turbulence Parameters (TRUE IDEAL) ---
-    CN2 = 1e-17           # [m^(-2/3)] 
+    CN2 = 1e-18           # [m^(-2/3)] 
     L0 = 10.0           # [m]
     L0_INNER = 0.005    # [m]
-    NUM_SCREENS = 15   
+    NUM_SCREENS = 10   
     CN2_MODEL = "uniform"  # Horizontal path → uniform profile; set "hufnagel_valley" for vertical links
     
     # --- Weather Condition ---
@@ -68,16 +69,16 @@ class SimulationConfig:
     PILOT_RATIO = 0.1   
     
     # FIXED: Multiple of total k_ldpc = FEC_RATE * 1024 * n_modes
-    N_INFO_BITS = 819 * 6  # 4914 bits (k=819 per codeword, 6 modes equiv)
+    N_INFO_BITS = 819 * 8  # 4914 bits (k=819 per codeword, 6 modes equiv)
     
     # --- Simulation Grid ---
     N_GRID = 512        # 512x512 is fast for a sanity check
-    OVERSAMPLING = 1    
+    OVERSAMPLING = 2    
     
     # --- Receiver Configuration (TRUE IDEAL) ---
     EQ_METHOD = 'auto'  # Auto-select MMSE when H is small (more robust than ZF)
     ADD_NOISE = False   # Disable additive noise
-    SNR_DB = 20        # Set to a high dummy value
+    SNR_DB = 50        # Set to a high dummy value
     
     # --- Output ---
     PLOT_DIR = os.path.join(SCRIPT_DIR, "e2e_results_ideal") # New folder
@@ -444,7 +445,7 @@ def plot_e2e_results(results, save_path=None):
     grid_info = results['grid_info']
     H_est = metrics['H_est']
     
-    fig = plt.figure(figsize=(20, 12))
+    fig = plt.figure(figsize=(10, 10))
     gs = fig.add_gridspec(2, 3)
     
     fig.suptitle(f"End-to-End FSO-OAM Simulation Results\n"
@@ -508,54 +509,54 @@ def plot_e2e_results(results, save_path=None):
     plt.colorbar(im4, ax=ax4, label='Phase (rad)')
     
     # Plot 5: Performance Metrics Text
-    ax5 = fig.add_subplot(gs[:, 2])
-    ax5.axis('off')
+#     ax5 = fig.add_subplot(gs[:, 2])
+#     ax5.axis('off')
     
-    # Get turbulence properties
-    temp_turb = AtmosphericTurbulence(
-        Cn2=cfg.CN2, L0=cfg.L0, l0=cfg.L0_INNER, wavelength=cfg.WAVELENGTH
-    )
+#     # Get turbulence properties
+#     temp_turb = AtmosphericTurbulence(
+#         Cn2=cfg.CN2, L0=cfg.L0, l0=cfg.L0_INNER, wavelength=cfg.WAVELENGTH
+#     )
     
-    metrics_text = f"""
-SYSTEM PERFORMANCE METRICS
+#     metrics_text = f"""
+# SYSTEM PERFORMANCE METRICS
 
-[Link Parameters]
-  Distance: {cfg.DISTANCE} m
-  Weather: {cfg.WEATHER}
-  Turbulence: Cn² = {cfg.CN2:.2e}
-  SNR: {cfg.SNR_DB} dB
-  Modes: {len(cfg.SPATIAL_MODES)} ( {', '.join(mode_labels)} )
+# [Link Parameters]
+#   Distance: {cfg.DISTANCE} m
+#   Weather: {cfg.WEATHER}
+#   Turbulence: Cn² = {cfg.CN2:.2e}
+#   SNR: {cfg.SNR_DB} dB
+#   Modes: {len(cfg.SPATIAL_MODES)} ( {', '.join(mode_labels)} )
 
-[Channel Metrics]
-  Rytov Variance: {temp_turb.rytov_variance(cfg.DISTANCE):.3f}
-  Fried Parameter (r0): {temp_turb.fried_parameter(cfg.DISTANCE)*1000:.2f} mm
-  Channel Condition: {np.linalg.cond(H_est):.2f}
+# [Channel Metrics]
+#   Rytov Variance: {temp_turb.rytov_variance(cfg.DISTANCE):.3f}
+#   Fried Parameter (r0): {temp_turb.fried_parameter(cfg.DISTANCE)*1000:.2f} mm
+#   Channel Condition: {np.linalg.cond(H_est):.2f}
   
-[Receiver Metrics]
-  Equalization: {cfg.EQ_METHOD.upper()}
-  Est. Noise Var: {metrics['noise_var']:.2e}
+# [Receiver Metrics]
+#   Equalization: {cfg.EQ_METHOD.upper()}
+#   Est. Noise Var: {metrics['noise_var']:.2e}
 
-[FINAL PERFORMANCE]
-  Total Info Bits: {metrics['total_bits']}
-  Bit Errors: {metrics['bit_errors']}
-  ---------------------------------
-  Bit Error Rate (BER): {metrics['ber']:.4e}
-  ---------------------------------
-    """
+# [FINAL PERFORMANCE]
+#   Total Info Bits: {metrics['total_bits']}
+#   Bit Errors: {metrics['bit_errors']}
+#   ---------------------------------
+#   Bit Error Rate (BER): {metrics['ber']:.4e}
+#   ---------------------------------
+#     """
     
-    ax5.text(0.0, 0.95, metrics_text, transform=ax5.transAxes,
-            fontsize=12, verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+#     ax5.text(0.0, 0.95, metrics_text, transform=ax5.transAxes,
+#             fontsize=12, verticalalignment='top', fontfamily='monospace',
+#             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     
-    if save_path:
-        # Ensure the directory exists before trying to save the file
-        plot_directory = os.path.dirname(save_path)
-        os.makedirs(plot_directory, exist_ok=True)
+#     if save_path:
+#         # Ensure the directory exists before trying to save the file
+#         plot_directory = os.path.dirname(save_path)
+#         os.makedirs(plot_directory, exist_ok=True)
         
-        plt.savefig(save_path, dpi=cfg.DPI, bbox_inches='tight')
-        print(f"\n✓ E2E Results plot saved to: {save_path}")
+#         plt.savefig(save_path, dpi=cfg.DPI, bbox_inches='tight')
+#         print(f"\n✓ E2E Results plot saved to: {save_path}")
     
     return fig
 

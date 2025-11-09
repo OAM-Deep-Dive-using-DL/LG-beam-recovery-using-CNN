@@ -104,6 +104,8 @@ ENV/
 env.bak/
 venv.bak/
 
+*.md
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -113,6 +115,9 @@ venv.bak/
 
 # mkdocs documentation
 /site
+*.mdc 
+*.md5
+
 
 # mypy
 .mypy_cache/
