@@ -1,0 +1,120 @@
+{
+  "bundle_id": "neural_rx_v1",
+  "export_timestamp": "2025-11-10T00:05:01.151491Z",
+  "checkpoint_source": "checkpoints\\neural_rx\\best_model.pt",
+  "dataset": {
+    "path": "dataset.h5",
+    "uuid": "b84e4a35-681a-4fcb-b5ef-cf5e0e026900",
+    "num_samples": 118825,
+    "meta": {
+      "spatial_modes": [
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          -3
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          -4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "wavelength": 1.55e-06,
+      "w0": 0.025,
+      "distance": 800.0,
+      "grid_extent": 0.9936592792996608,
+      "grid_size": 128,
+      "pilot_ratio": 0.2,
+      "frame_length": 679,
+      "fec_rate": 0.5
+    }
+  },
+  "model": {
+    "config": {
+      "spatial_modes": [
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          -3
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          -4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "wavelength": 1.55e-06,
+      "w0": 0.025,
+      "distance": 800.0,
+      "grid_extent": 0.9936592792996608,
+      "grid_size": 128,
+      "pilot_ratio": 0.2,
+      "feature_channels": 24,
+      "transformer_heads": 2,
+      "transformer_layers": 1,
+      "transformer_dim": 96,
+      "use_checkpoint": true
+    },
+    "parameter_count": 702247,
+    "state_sha256": "036f085744897a59cd2c8f49c14577d5fbe2bac4d220ab5c809da6ab2930c7b7"
+  },
+  "training": {
+    "epoch": 46,
+    "val_loss": 0.5879889772689176,
+    "symbol_weight": 0.2
+  },
+  "environment": {
+    "torch_version": "2.9.0+cpu",
+    "python_version": [
+      3,
+      11,
+      9
+    ]
+  },
+  "commit_hash": "unknown",
+  "extra_note": ""
+}

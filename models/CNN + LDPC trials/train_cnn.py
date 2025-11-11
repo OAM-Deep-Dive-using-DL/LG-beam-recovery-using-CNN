@@ -18,6 +18,7 @@ from typing import Dict, Tuple
 import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -69,6 +70,15 @@ def _qpsk_symbol_to_index(symbol: torch.Tensor) -> torch.Tensor:
 
 def _qpsk_index_to_bits(index: torch.Tensor) -> torch.Tensor:
     return _QPSK_BITS.to(index.device)[index]
+
+
+def _symbol_loss(pred: torch.Tensor, target: torch.Tensor, loss_type: str) -> torch.Tensor:
+    if loss_type == "mse":
+        return F.mse_loss(pred, target)
+    if loss_type == "cosine":
+        cos = F.cosine_similarity(pred, target, dim=-1)
+        return (1.0 - cos).mean()
+    raise ValueError(f"Unsupported symbol loss type: {loss_type}")
 
 
 class OAMH5Dataset(Dataset):
@@ -177,6 +187,9 @@ def train_epoch(
     scaler: GradScaler,
     use_amp: bool,
     accum_steps: int,
+    ce_loss_fn: nn.Module,
+    symbol_loss_type: str,
+    bit_loss_weight: float,
 ) -> Dict[str, float]:
     if accum_steps < 1:
         raise ValueError("accum_steps must be >= 1")
@@ -184,6 +197,7 @@ def train_epoch(
     total_loss = 0.0
     total_ce = 0.0
     total_sym = 0.0
+    total_bit = 0.0
     count = 0
     progress = tqdm(loader, desc="train", leave=False)
     autocast_enabled = use_amp and device.type in ("cuda", "mps")
@@ -195,6 +209,7 @@ def train_epoch(
         pilot_mask = batch["pilot_mask"].to(device, non_blocking=True)
         class_index = batch["class_index"].to(device, non_blocking=True)
         target_symbols = batch["symbols"].to(device, non_blocking=True)
+        target_bits = batch["bits"].to(device, non_blocking=True)
 
         with autocast(
             device_type=autocast_device,
@@ -203,15 +218,21 @@ def train_epoch(
         ):
             out = model(field, pilot_mask=pilot_mask)
             logits = out["class_logits"].view(-1, model.n_modes, 4)
-            ce_loss = F.cross_entropy(logits.view(-1, 4), class_index.view(-1))
+            ce_loss = ce_loss_fn(logits.view(-1, 4), class_index.view(-1))
             pred_symbol = out["symbol"]
-            sym_loss = F.mse_loss(pred_symbol, target_symbols)
+            sym_loss = _symbol_loss(pred_symbol, target_symbols, symbol_loss_type)
             loss = ce_loss + symbol_weight * sym_loss
+            if bit_loss_weight > 0:
+                bit_loss = F.binary_cross_entropy_with_logits(out["llr"], target_bits)
+                loss = loss + bit_loss_weight * bit_loss
+            else:
+                bit_loss = loss.new_tensor(0.0)
 
         batch_size = field.size(0)
         total_loss += loss.detach().item() * batch_size
         total_ce += ce_loss.detach().item() * batch_size
         total_sym += sym_loss.detach().item() * batch_size
+        total_bit += bit_loss.detach().item() * batch_size
         count += batch_size
 
         loss_to_backward = loss / accum_steps
@@ -234,11 +255,13 @@ def train_epoch(
                 loss=total_loss / count,
                 ce=total_ce / count,
                 sym=total_sym / count,
+                bit=total_bit / count if bit_loss_weight > 0 else 0.0,
             )
     return {
         "loss": total_loss / count,
         "ce": total_ce / count,
         "symbol": total_sym / count,
+        "bit": total_bit / count if bit_loss_weight > 0 else 0.0,
     }
 
 
@@ -248,11 +271,15 @@ def evaluate(
     device: torch.device,
     symbol_weight: float,
     use_amp: bool,
+    ce_loss_fn: nn.Module,
+    symbol_loss_type: str,
+    bit_loss_weight: float,
 ) -> Dict[str, float]:
     model.eval()
     total_loss = 0.0
     total_ce = 0.0
     total_sym = 0.0
+    total_bit = 0.0
     count = 0
     autocast_enabled = use_amp and device.type in ("cuda", "mps")
     autocast_device = device.type if device.type in ("cuda", "mps") else "cpu"
@@ -263,6 +290,7 @@ def evaluate(
             pilot_mask = batch["pilot_mask"].to(device, non_blocking=True)
             class_index = batch["class_index"].to(device, non_blocking=True)
             target_symbols = batch["symbols"].to(device, non_blocking=True)
+            target_bits = batch["bits"].to(device, non_blocking=True)
             with autocast(
                 device_type=autocast_device,
                 dtype=torch.float16,
@@ -270,18 +298,25 @@ def evaluate(
             ):
                 out = model(field, pilot_mask=pilot_mask)
                 logits = out["class_logits"].view(-1, model.n_modes, 4)
-                ce_loss = F.cross_entropy(logits.view(-1, 4), class_index.view(-1))
-                sym_loss = F.mse_loss(out["symbol"], target_symbols)
+                ce_loss = ce_loss_fn(logits.view(-1, 4), class_index.view(-1))
+                sym_loss = _symbol_loss(out["symbol"], target_symbols, symbol_loss_type)
                 loss = ce_loss + symbol_weight * sym_loss
+                if bit_loss_weight > 0:
+                    bit_loss = F.binary_cross_entropy_with_logits(out["llr"], target_bits)
+                    loss = loss + bit_loss_weight * bit_loss
+                else:
+                    bit_loss = loss.new_tensor(0.0)
             batch_size = field.size(0)
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
             total_sym += sym_loss.item() * batch_size
+            total_bit += bit_loss.item() * batch_size
             count += batch_size
     return {
         "loss": total_loss / count,
         "ce": total_ce / count,
         "symbol": total_sym / count,
+        "bit": total_bit / count if bit_loss_weight > 0 else 0.0,
     }
 
 
@@ -293,7 +328,26 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--symbol-weight", type=float, default=0.2, help="Weight for symbol regression term")
+    parser.add_argument("--symbol-weight", type=float, default=0.5, help="Weight for symbol regression term")
+    parser.add_argument(
+        "--symbol-loss",
+        type=str,
+        default="mse",
+        choices=("mse", "cosine"),
+        help="Type of auxiliary symbol loss to use.",
+    )
+    parser.add_argument(
+        "--bit-loss-weight",
+        type=float,
+        default=0.0,
+        help="Optional weight for binary cross-entropy on predicted LLRs.",
+    )
+    parser.add_argument(
+        "--label-smoothing",
+        type=float,
+        default=0.05,
+        help="Label smoothing applied to the CE loss.",
+    )
     parser.add_argument("--val-split", type=float, default=0.1)
     default_device = (
         "cuda"
@@ -304,10 +358,18 @@ def main() -> None:
     )
     parser.add_argument("--device", type=str, default=default_device)
     parser.add_argument("--save-dir", type=Path, default=Path("checkpoints"))
-    parser.add_argument("--feature-channels", type=int, default=32)
-    parser.add_argument("--transformer-dim", type=int, default=128)
-    parser.add_argument("--transformer-heads", type=int, default=2)
-    parser.add_argument("--transformer-layers", type=int, default=2)
+    parser.add_argument("--feature-channels", type=int, default=48)
+    parser.add_argument("--transformer-dim", type=int, default=192)
+    parser.add_argument("--transformer-heads", type=int, default=3)
+    parser.add_argument("--transformer-layers", type=int, default=3)
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout applied within CNN/MLP heads.")
+    parser.add_argument("--transformer-dropout", type=float, default=0.1, help="Dropout inside the transformer encoder.")
+    parser.add_argument(
+        "--stochastic-depth",
+        type=float,
+        default=0.1,
+        help="Final stochastic depth probability across CNN residual blocks.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use-amp", action="store_true", help="Enable mixed precision (CUDA/MPS).")
     parser.add_argument("--compile", action="store_true", help="Compile the model for graph optimisations.")
@@ -327,7 +389,11 @@ def main() -> None:
     meta = _load_meta(args.dataset)
     dataset = OAMH5Dataset(args.dataset, meta)
     val_len = int(len(dataset) * args.val_split)
+    if args.val_split > 0 and val_len == 0:
+        val_len = 1
     train_len = len(dataset) - val_len
+    if train_len <= 0:
+        raise ValueError("Validation split too large; no samples left for training.")
     train_ds, val_ds = random_split(dataset, [train_len, val_len])
 
     pin_memory = args.device.startswith("cuda")
@@ -362,6 +428,9 @@ def main() -> None:
         transformer_dim=args.transformer_dim,
         transformer_heads=args.transformer_heads,
         transformer_layers=args.transformer_layers,
+        dropout=args.dropout,
+        transformer_dropout=args.transformer_dropout,
+        stochastic_depth_prob=args.stochastic_depth,
         use_checkpoint=args.grad_checkpoint,
     )
     device = torch.device(args.device)
@@ -376,6 +445,7 @@ def main() -> None:
     optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
     scaler = GradScaler(enabled=args.use_amp and device.type == "cuda")
+    ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(device)
 
     args.save_dir.mkdir(parents=True, exist_ok=True)
     best_val = float("inf")
@@ -388,8 +458,10 @@ def main() -> None:
             args.symbol_weight,
             scaler,
             args.use_amp,
-            args.use_amp,
             args.accum_steps,
+            ce_loss_fn,
+            args.symbol_loss,
+            args.bit_loss_weight,
         )
         val_metrics = evaluate(
             model,
@@ -397,12 +469,19 @@ def main() -> None:
             device,
             args.symbol_weight,
             args.use_amp,
+            ce_loss_fn,
+            args.symbol_loss,
+            args.bit_loss_weight,
         )
         scheduler.step()
+        train_bit = f" bit={train_metrics['bit']:.4f}" if args.bit_loss_weight > 0 else ""
+        val_bit = f" bit={val_metrics['bit']:.4f}" if args.bit_loss_weight > 0 else ""
         print(
             f"Epoch {epoch:03d} | "
-            f"train loss={train_metrics['loss']:.4f} ce={train_metrics['ce']:.4f} sym={train_metrics['symbol']:.4f} | "
+            f"train loss={train_metrics['loss']:.4f} ce={train_metrics['ce']:.4f} sym={train_metrics['symbol']:.4f}"
+            f"{train_bit} | "
             f"val loss={val_metrics['loss']:.4f} ce={val_metrics['ce']:.4f} sym={val_metrics['symbol']:.4f}"
+            f"{val_bit}"
         )
         if val_metrics["loss"] < best_val:
             best_val = val_metrics["loss"]
