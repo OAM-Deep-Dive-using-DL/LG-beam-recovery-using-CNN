@@ -23,14 +23,8 @@ np.random.seed(42)
 PLOT_DIR = os.path.join(SCRIPT_DIR, "plots")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-# --------------------------
-# Kim attenuation (unchanged)
-# --------------------------
 def calculate_kim_attenuation(wavelength_nm, visibility_km):
-    """
-    Kim model: α(λ) [1/km] = (3.91/V) * (λ/550nm)^(-q)
-    Converts to dB/km by multiplying by 10*log10(e) ≈ 4.343.
-    """
+
     if visibility_km <= 0:
         warnings.warn(f"Invalid visibility {visibility_km} km. Returning inf attenuation.")
         return np.inf
@@ -54,27 +48,6 @@ def calculate_kim_attenuation(wavelength_nm, visibility_km):
 # Numeric collection fraction for LG modes (recommended)
 # ----------------------------------------------------
 def collection_fraction_numeric(beam, z, receiver_radius, n_r=4096, r_factor=8.0, n_phi=16):
-    """
-    Numerically compute fraction of total beam power captured by a circular aperture of radius
-    receiver_radius at distance z for the given LaguerreGaussianBeam instance.
-
-    Integration performed as:
-      frac = (∫_{0}^{R_ap} 2π r I(r) dr) / (∫_{0}^{Rmax} 2π r I(r) dr)
-
-    Strategy:
-      - Prefer beam.radial_intensity(r, z) if implemented (fast).
-      - Otherwise compute azimuthally-averaged radial intensity by sampling a small set of phi values
-        and using beam.generate_beam_field(R, PHI, z) if available.
-
-    Parameters:
-    - beam: LaguerreGaussianBeam instance (must implement beam.beam_waist(z) and either radial_intensity or generate_beam_field)
-    - z: propagation distance [m]
-    - receiver_radius: aperture radius [m]
-    - n_r: number of radial samples
-    - r_factor: number of beam waists to use as Rmax (Rmax = r_factor * w_z)
-    - n_phi: number of azimuth samples for averaging (if radial API absent)
-    """
-    # get beam waist
     try:
         w_z = float(beam.beam_waist(z))
     except Exception:
@@ -155,14 +128,7 @@ def collection_fraction_numeric(beam, z, receiver_radius, n_r=4096, r_factor=8.0
 # Geometric loss (uses numeric)
 # ------------------------------
 def calculate_geometric_loss(beam, z, receiver_radius, grid_size=501, extent_factor=4.0):
-    """
-    Compute geometric (clipping/collection) loss by numeric integration.
-    - First tries the faster radial integration `collection_fraction_numeric`.
-    - If that fails, falls back to a 2D grid via beam.calculate_intensity(R,PHI,z,...).
 
-    Returns:
-      (L_geo_dB, eta_collection)
-    """
     # attempt radial integration (preferred)
     try:
         eta = collection_fraction_numeric(beam, z, receiver_radius, n_r=2048, r_factor=8.0, n_phi=16)
@@ -218,13 +184,7 @@ def calculate_geometric_loss(beam, z, receiver_radius, grid_size=501, extent_fac
 from scipy.stats import norm
 
 def scintillation_outage_margin_db(Cn2, wavelength, z, receiver_diameter, outage_prob=0.01):
-    """
-    Given turbulence Cn2, wavelength [m], distance z [m], and receiver diameter [m],
-    compute a conservative fade margin (dB) such that outage probability ~ outage_prob
-    using log-normal approximation after aperture averaging.
 
-    Returns positive dB number (fade margin to allocate).
-    """
     if Cn2 is None or Cn2 <= 0:
         return 0.0
 
@@ -251,15 +211,6 @@ def scintillation_outage_margin_db(Cn2, wavelength, z, receiver_diameter, outage
 # ---------------------------------------
 def calculate_path_loss(self, z, receiver_radius, P_tx=1.0, weather='clear', use_kim_model=False,
                         custom_alpha_dBkm=None, C_n2=None):
-    """
-    Calculates total path loss (geometric + atmospheric + scintillation) for an FSO link.
-    This is designed to be monkey-patched onto LaguerreGaussianBeam.
-
-    Returns dictionary with items:
-      'L_geo_dB', 'L_atm_dB', 'L_scint_dB', 'L_total_dB', 'P_rx_W', 'P_rx_dBm',
-      'eta_collection', 'beam_waist_m', 'weather', 'alpha_atm_dBkm', 'model', plus
-      'sigma_I2', 'sigma_ln2', 'r0_m', 'A_aperture' for diagnostics.
-    """
     weather_attenuation_dbkm = {
         'clear': 0.43, 'haze': 4.2, 'light_fog': 20,
         'moderate_fog': 42, 'dense_fog': 100
@@ -353,18 +304,13 @@ def calculate_path_loss(self, z, receiver_radius, P_tx=1.0, weather='clear', use
         'A_aperture': float(A)
     }
 
-# -----------------------------------------
-# Link budget summary (unchanged except call)
-# -----------------------------------------
+
 def link_budget_summary(self, distances, receiver_diameter=0.2, P_tx=1.0, weather='clear',
                         use_kim_model=False, C_n2=None):
-    """
-    Prints formatted link budget summary table for multiple distances.
-    This is monkey-patched onto LaguerreGaussianBeam.
-    """
+
     receiver_radius = receiver_diameter / 2.0
 
-    print(f"\nLINK BUDGET SUMMARY: LG_{self.p}^{self.l} Beam")
+    print(f"\n - link budget summary : LG_{self.p}^{self.l} Beam")
     print(f"Beam Parameters:")
     print(f"  M² = {self.M_squared:.1f} (beam quality factor)")
     print(f"  λ = {self.wavelength*1e9:.0f} nm (wavelength)")
@@ -381,7 +327,7 @@ def link_budget_summary(self, distances, receiver_diameter=0.2, P_tx=1.0, weathe
 
     test_result = self.calculate_path_loss(distances[0], receiver_radius, P_tx,
                                           weather=weather, use_kim_model=use_kim_model, C_n2=C_n2)
-    print(f"\nLink Parameters:")
+    print(f"\n - link parameters :")
     print(f"  P_tx = {P_tx:.2f} W ({10.0*np.log10(P_tx*1000.0):.1f} dBm)")
     print(f"  Receiver diameter = {receiver_diameter*100.0:.1f} cm")
     print(f"  Weather Condition = {test_result['weather'].capitalize()}")
@@ -407,9 +353,6 @@ def link_budget_summary(self, distances, receiver_diameter=0.2, P_tx=1.0, weathe
 LaguerreGaussianBeam.calculate_path_loss = calculate_path_loss
 LaguerreGaussianBeam.link_budget_summary = link_budget_summary
 
-# -------------------------------
-# plotting helpers (unchanged)
-# -------------------------------
 def plot_path_loss_analysis(beams_dict, distances=None, receiver_diameter=0.2,
                            P_tx=1.0, weather='clear', use_kim_model=False, C_n2=None):
     if distances is None:
@@ -667,7 +610,7 @@ if __name__ == "__main__":
                                    receiver_diameter=RECEIVER_DIAMETER,
                                    P_tx=P_TX, weather=WEATHER, use_kim_model=USE_KIM_MODEL, C_n2=C_N2)
     path_loss_fig_path = os.path.join(PLOT_DIR, f'oam_path_loss_{WEATHER}_{"kim" if USE_KIM_MODEL else "emp"}{"_turb" if C_N2 else ""}.png')
-    fig1.savefig(path_loss_fig_path, dpi=600, bbox_inches='tight')  # IEEE compliance: 600 DPI
+    fig1.savefig(path_loss_fig_path, dpi=1200, bbox_inches='tight')  # IEEE compliance: 1200 DPI
     print(f"Saved path loss plot to {path_loss_fig_path}")
 
     sweep_results = wavelength_sweep_analysis(
@@ -684,8 +627,7 @@ if __name__ == "__main__":
     fig2 = plot_wavelength_sweep(WAVELENGTH_SWEEP_RANGE, sweep_results,
                                  oam_mode_p=0, oam_mode_l=3, distance_m=1000)
     wavelength_fig_path = os.path.join(PLOT_DIR, f'wavelength_sweep_p0_l3_1km{"_turb" if C_N2 else ""}.png')
-    fig2.savefig(wavelength_fig_path, dpi=600, bbox_inches='tight')  # IEEE compliance: 600 DPI
+    fig2.savefig(wavelength_fig_path, dpi=1200, bbox_inches='tight')  # IEEE compliance: 1200 DPI
     print(f"Saved wavelength sweep plot to {wavelength_fig_path}")
 
     plt.show()
-    print("Done.")

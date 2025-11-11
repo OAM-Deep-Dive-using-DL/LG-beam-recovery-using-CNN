@@ -24,13 +24,10 @@ except Exception as e:
 warnings.filterwarnings("ignore")
 np.random.seed(42)
 
-# Alias for integration (NumPy 1.x compat)
+
 trapezium = trapz
 
 
-# ---------------------------
-# Angular Spectrum Propagation (Internal: Fourier domain transfer for diffraction)
-# ---------------------------
 def angular_spectrum_propagation(field, delta, wavelength, distance):
     """
     Propagates field via angular spectrum (non-paraxial; Goodman 2005, Eq. 5-20).
@@ -59,9 +56,7 @@ def angular_spectrum_propagation(field, delta, wavelength, distance):
     return propagated
 
 
-# ---------------------------
-# Von Kármán Phase Screen Generator (Internal: PSD-based random phase)
-# ---------------------------
+
 def generate_phase_screen(r0, N, delta, L0=10.0, l0=0.005):
     """
     Generates single thin phase screen via Von Kármán spectrum (Andrews 2005, Eq. 12.75).
@@ -109,9 +104,7 @@ def generate_phase_screen(r0, N, delta, L0=10.0, l0=0.005):
     return phi
 
 
-# ---------------------------
-# Atmospheric Turbulence Class (Internal: Path-Integrated Metrics)
-# ---------------------------
+
 class AtmosphericTurbulence:
     """
     Computes turbulence parameters for LG beams.
@@ -191,9 +184,6 @@ class AtmosphericTurbulence:
             raise ValueError(f"Unknown beam_type: {beam_type}")
 
 
-# ---------------------------
-# Cn2 Profiles (Internal: Vertical/Integrated Turbulence Strength)
-# ---------------------------
 def cn2_profile(z, ground_cn2=1e-14, model="hufnagel_valley"):
     """
     C_n²(z) models (Andrews 2005, Sec. 12.2).
@@ -216,9 +206,7 @@ def cn2_profile(z, ground_cn2=1e-14, model="hufnagel_valley"):
         raise ValueError(f"Unknown Cn2 model: {model}")
 
 
-# ---------------------------
-# Multi-Layer Screen Creator (Internal: Slab-Integrated r0)
-# ---------------------------
+
 def create_multi_layer_screens(total_distance, num_screens, wavelength, ground_Cn2=5e-13,
                                L0=10.0, l0=0.005, cn2_model="hufnagel_valley", verbose=True):
     """
@@ -269,9 +257,7 @@ def create_multi_layer_screens(total_distance, num_screens, wavelength, ground_C
     return layers
 
 
-# ---------------------------
-# Apply Multi-Layer Turbulence (Internal: Split-Step on LG Field; Verified Pipeline)
-# ---------------------------
+
 def apply_multi_layer_turbulence(initial_field, base_beam, layers, total_distance,
                                  *, N=256, oversampling=1, L0=10.0, l0=0.005):
     """
@@ -356,18 +342,7 @@ def apply_multi_layer_turbulence(initial_field, base_beam, layers, total_distanc
         field_turb = angular_spectrum_propagation(field_turb, delta, base_beam.wavelength, remaining)
         print(f"    Final prop: {remaining:.1f}m")
 
-    # CRITICAL FIX: Do NOT normalize - preserve actual power through propagation
-    # Power normalization was destroying the physical power information needed for correct
-    # channel estimation. Power is now preserved through propagation and handled by
-    # attenuation and aperture in pipeline.py.
-    # 
-    # OLD (normalized to unit power):
-    # p_turb = np.sum(np.abs(field_turb)**2) * delta**2
-    # if p_turb > 0:
-    #     field_turb /= np.sqrt(p_turb)
-    #
-    # NEW: Preserve actual power (P_tx after propagation)
-    # Attenuation and aperture effects are applied in pipeline.py
+
 
     return {
         "final_field": field_turb,
@@ -377,9 +352,7 @@ def apply_multi_layer_turbulence(initial_field, base_beam, layers, total_distanc
     }
 
 
-# ---------------------------
-# Phase Screen Diagnostics (Internal: Variance Validation)
-# ---------------------------
+
 def diagnose_phase_screen(r0, N, delta, L0=10.0, l0=0.005):
     """
     Validates screen: Var(φ) vs. theory.
@@ -408,9 +381,6 @@ def diagnose_phase_screen(r0, N, delta, L0=10.0, l0=0.005):
     return phi
 
 
-# ---------------------------
-# Effects Analysis (Internal: Ensemble Stats for LG Effects; Print Fixed)
-# ---------------------------
 def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling=1, 
                                L0=10.0, l0=0.005, num_ensembles=3, verbose=True):
     """
@@ -465,9 +435,7 @@ def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling
     return {'strehl_mean': strehl_mean, 'scint_mean': scint_mean}, result
 
 
-# ---------------------------
-# Validation Suite (Internal: Lit. Checks; All PASS)
-# ---------------------------
+
 def validate_turbulence_implementation():
     """
     Validates processes (Andrews 2005; Schmidt 2010).
@@ -549,9 +517,6 @@ def validate_turbulence_implementation():
     return all_passed
 
 
-# ---------------------------
-# 2D Masked Phase Unwrap (Internal: Resolve Jumps for OAM Viz)
-# ---------------------------
 def unwrap_masked_phase(phase, mask):
     """
     2D unwrap on ROI (Herráez Appl. Opt. 2002; row-col).
@@ -593,9 +558,7 @@ def unwrap_masked_phase(phase, mask):
     return phase_unwrapped
 
 
-# ---------------------------
-# Multi-Panel Plotting (Viz: Pristine vs. Distorted LG; Verified)
-# ---------------------------
+
 def plot_multi_layer_effects(beam, num_screens_list, distance, ground_Cn2, L0, l0,
                              N, oversampling, save_path=None, cn2_model="hufnagel_valley"):
     """
@@ -607,7 +570,8 @@ def plot_multi_layer_effects(beam, num_screens_list, distance, ground_Cn2, L0, l
     - Fix: No 'power' kwarg.
     """
     n_cases = len(num_screens_list)
-    fig, axes = plt.subplots(4, n_cases, figsize=(5 * n_cases, 16), squeeze=False)
+    fig = plt.figure(figsize=(5 * n_cases, 16), constrained_layout=True)
+    gs = fig.add_gridspec(4, n_cases, hspace=0.3, wspace=0.3)
 
     for i, num_screens in enumerate(num_screens_list):
         print(f"  Plotting {num_screens} screens...")
@@ -630,8 +594,10 @@ def plot_multi_layer_effects(beam, num_screens_list, distance, ground_Cn2, L0, l
 
         if np.isnan(distorted_field).any() or np.sum(np.abs(distorted_field)) == 0:
             for r in range(4):
-                axes[r, i].text(0.5, 0.5, "NaN/Zero (Excessive Spread)", ha="center", va="center",
-                                transform=axes[r, i].transAxes, fontsize=12, color='red')
+                ax = fig.add_subplot(gs[r, i])
+                ax.axis("off")
+                ax.text(0.5, 0.5, "NaN/Zero (Excessive Spread)", ha="center", va="center",
+                        transform=ax.transAxes, fontsize=12, color='red')
             continue
 
         pristine_I = np.abs(pristine_field) ** 2
@@ -646,46 +612,51 @@ def plot_multi_layer_effects(beam, num_screens_list, distance, ground_Cn2, L0, l
         extent = [-extent_mm, extent_mm, -extent_mm, extent_mm]
 
         # Pristine I (LG donut)
-        im0 = axes[0, i].imshow(pristine_I, extent=extent, cmap="hot", origin="lower")
-        axes[0, i].set_title(f"Pristine Intensity\nLG p={beam.p}, l={beam.l} (M²={beam.M_squared:.1f})")
-        axes[0, i].set_xlabel("x [mm]")
-        axes[0, i].set_ylabel("y [mm]")
-        plt.colorbar(im0, ax=axes[0, i], fraction=0.046, label="Intensity [a.u.]")
+        ax0 = fig.add_subplot(gs[0, i])
+        im0 = ax0.imshow(pristine_I, extent=extent, cmap="hot", origin="lower")
+        ax0.set_title(f"Pristine Intensity\nLG p={beam.p}, l={beam.l} (M²={beam.M_squared:.1f})")
+        ax0.set_xlabel("x [mm]")
+        ax0.set_ylabel("y [mm]")
+        fig.colorbar(im0, ax=ax0, fraction=0.046, label="Intensity [a.u.]")
 
         # Pristine φ (helix)
         wrapped_prist = pristine_phase % (2*np.pi) - np.pi
-        im1 = axes[1, i].imshow(wrapped_prist, extent=extent, cmap="hsv", origin="lower", vmin=-np.pi, vmax=np.pi)
-        axes[1, i].set_title("Pristine Phase (Unwrapped, Display Wrapped)")
-        axes[1, i].set_xlabel("x [mm]")
-        axes[1, i].set_ylabel("y [mm]")
-        plt.colorbar(im1, ax=axes[1, i], fraction=0.046, label="Phase [rad]")
+        ax1 = fig.add_subplot(gs[1, i])
+        im1 = ax1.imshow(wrapped_prist, extent=extent, cmap="hsv", origin="lower", vmin=-np.pi, vmax=np.pi)
+        ax1.set_title("Pristine Phase (unwrapped, display wrapped)")
+        ax1.set_xlabel("x [mm]")
+        ax1.set_ylabel("y [mm]")
+        fig.colorbar(im1, ax=ax1, fraction=0.046, label="Phase [rad]")
 
         # Dist I (scint/tilt)
-        im2 = axes[2, i].imshow(distorted_I, extent=extent, cmap="hot", origin="lower")
-        axes[2, i].set_title(f"Distorted Intensity ({num_screens} Screens)")
-        axes[2, i].set_xlabel("x [mm]")
-        axes[2, i].set_ylabel("y [mm]")
-        plt.colorbar(im2, ax=axes[2, i], fraction=0.046, label="Intensity [a.u.]")
+        ax2 = fig.add_subplot(gs[2, i])
+        im2 = ax2.imshow(distorted_I, extent=extent, cmap="hot", origin="lower")
+        ax2.set_title(f"Distorted Intensity ({num_screens} screens)")
+        ax2.set_xlabel("x [mm]")
+        ax2.set_ylabel("y [mm]")
+        fig.colorbar(im2, ax=ax2, fraction=0.046, label="Intensity [a.u.]")
 
         # Dist φ (OAM warp)
         wrapped_dist = distorted_phase % (2*np.pi) - np.pi
-        im3 = axes[3, i].imshow(wrapped_dist, extent=extent, cmap="hsv", origin="lower", vmin=-np.pi, vmax=np.pi)
-        axes[3, i].set_title(f"Distorted Phase\nC_n²={ground_Cn2:.1e} m^{-2/3}")
-        axes[3, i].set_xlabel("x [mm]")
-        axes[3, i].set_ylabel("y [mm]")
-        plt.colorbar(im3, ax=axes[3, i], fraction=0.046, label="Phase [rad]")
+        ax3 = fig.add_subplot(gs[3, i])
+        im3 = ax3.imshow(wrapped_dist, extent=extent, cmap="hsv", origin="lower", vmin=-np.pi, vmax=np.pi)
+        ax3.set_title(f"Distorted Phase\nC_n²={ground_Cn2:.1e} m$^{{-2/3}}$")
+        ax3.set_xlabel("x [mm]")
+        ax3.set_ylabel("y [mm]")
+        fig.colorbar(im3, ax=ax3, fraction=0.046, label="Phase [rad]")
 
-    plt.suptitle(f"LG Beam under Multi-Layer Atmospheric Turbulence (Pristine vs. Distorted) for {ground_Cn2} m^(2/3) -> z = {distance}m", fontsize=14, y=0.98)
-    plt.tight_layout()
+    plt.suptitle(
+        f"LG Beam under Multi-Layer Atmospheric Turbulence (Pristine vs. Distorted)\n"
+        f"Cn²={ground_Cn2:.1e} m$^{{-2/3}}$, z={distance} m",
+        fontsize=14,
+        y=1.02,
+    )
     if save_path:
-        plt.savefig(save_path, dpi=600, bbox_inches="tight")  # IEEE compliance: 600 DPI
+        plt.savefig(save_path, dpi=1200, bbox_inches="tight")
         print(f"  Saved visualization: {save_path}")
     return fig
 
 
-# ---------------------------
-# Demo & Check (Validation, Analysis, Plot; User-Confirmed Results)
-# ---------------------------
 if __name__ == "__main__":
     if LaguerreGaussianBeam is None:
         print("ERROR: lgBeam.py required. Place in script dir and rerun.")
@@ -694,7 +665,7 @@ if __name__ == "__main__":
     WAVELENGTH = 1550e-9
     W0 = 25e-3
     DISTANCE = 1000.0
-    GROUND_CN2 = 1e-11
+    GROUND_CN2 = 1e-17
     L0_OUTER = 10.0
     L0_INNER = 0.005
     N_GRID = 256
@@ -725,13 +696,12 @@ if __name__ == "__main__":
     print(f"w(L): {beam_size_L*1000:.1f} mm, Grid D={D:.2f}m, δx={delta*1000:.2f}mm")
     print(f"δx/l0: {delta/L0_INNER:.2f} {'✓ Resolved' if delta < L0_INNER/2 else '⚠ Coarse'}")
 
-    # Screen Check
-    print("\n--- Phase Screen Check ---")
+
     single_r0 = total_r0
     diagnose_phi = diagnose_phase_screen(single_r0, N_GRID, delta, L0_OUTER, L0_INNER)
 
 
-    print("\n--- LG Effects (Ensembles) ---")
+
     for num_screens in []:
         print(f"\n{num_screens} Screens:")
         layers_demo = create_multi_layer_screens(DISTANCE, num_screens, WAVELENGTH, GROUND_CN2, L0_OUTER, L0_INNER, CN2_MODEL)

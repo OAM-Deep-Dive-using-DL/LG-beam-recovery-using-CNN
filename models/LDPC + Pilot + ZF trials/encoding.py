@@ -28,16 +28,15 @@ pyldpc_encode = None
 pyldpc_decode = None
 pyldpc_get_message = None
 try:
-    # Preferred import set (0.7.x and similar)
+
     from pyldpc import make_ldpc, encode as pyldpc_encode, decode as pyldpc_decode, get_message as pyldpc_get_message
-    # Some pyldpc versions also expose an LDPC class for BP decoding
+ 
     try:
         from pyldpc import LDPC as pyldpc_LDPC_class
     except Exception:
         pyldpc_LDPC_class = None
     _HAS_PYLDPC = True
 except Exception:
-    # try minimal import (older/different packaging) — at least make_ldpc
     try:
         from pyldpc import make_ldpc
         _HAS_PYLDPC = True
@@ -45,7 +44,7 @@ except Exception:
         warnings.warn("pyldpc not found. Install: pip install pyldpc for LDPC.")
         _HAS_PYLDPC = False
 
-# ---------- Utilities ----------
+
 def _closest_divisor_leq(n: int, target: int) -> int:
     if target <= 1:
         return 1
@@ -63,7 +62,7 @@ def normalize_bits(bits: np.ndarray) -> np.ndarray:
     arr = np.mod(arr.astype(int), 2)
     return arr
 
-# ---------- Frame dataclass ----------
+
 @dataclass
 class FSO_MDM_Frame:
     tx_signals: Dict[Tuple[int, int], Dict[str, Any]]
@@ -134,7 +133,6 @@ class FSO_MDM_Frame:
         meta = recon(d.get("metadata", {}))
         return cls(tx_signals=tx, multiplexed_field=mf, grid_info=grid, metadata=meta)
 
-# ---------- QPSK ----------
 class QPSKModulator:
     def __init__(self, symbol_energy=1.0):
         self.Es = float(symbol_energy)
@@ -189,16 +187,9 @@ class QPSKModulator:
         ax.grid(True)
         ax.axis("equal")
         return ax
-
-# ---------- PyLDPCWrapper ----------
 class PyLDPCWrapper:
     def __init__(self, n=2048, rate=0.8, dv=3, dc=None, seed=42):
-        """
-        Robust initialization for PyLDPCWrapper.
-        - Ensures pyldpc present.
-        - Chooses d_c that divides n (pyldpc requirement) and is close to theoretical dv/(1-rate).
-        - Falls back gracefully if make_ldpc fails.
-        """
+
         if not _HAS_PYLDPC:
             raise RuntimeError("pyldpc required. Install: pip install pyldpc")
 
@@ -227,34 +218,27 @@ class PyLDPCWrapper:
 
         n_val = self._n_req
         n_divs = divisors_of(n_val)
-        # require d_c > dv and >= 3 (practical constraint)
         candidates = [d for d in n_divs if (d >= 3 and d > self.dv)]
         if len(candidates) == 0:
-            # extremely unlikely for reasonable dv/n; raise clear error
             raise ValueError(f"No valid d_c divisors found for n={n_val} with dv={self.dv}")
 
-        # if user provided dc explicitly, prefer it but ensure it divides n (otherwise pick nearest)
         if dc is not None:
             if n_val % int(dc) == 0 and int(dc) > self.dv:
                 self.dc = int(dc)
             else:
                 warnings.warn(f"Requested d_c={dc} is invalid for n={n_val} (must divide n and be > dv). Falling back to auto-select.")
-                # fall through to auto-pick
                 self.dc = None
         else:
             self.dc = None
 
-        # Auto-pick d_c (if not set or invalid) as divisor of n closest to theoretical (tie -> pick larger)
         if self.dc is None:
             self.dc = int(min(candidates, key=lambda x: (abs(x - theory_dc), -x)))
             if self.dc != theory_dc:
                 warnings.warn(f"Adjusted d_c from theoretical {theory_dc} -> {self.dc} (must divide n={n_val}).")
 
-        # Now call make_ldpc with chosen dv, dc
         try:
             H, G = make_ldpc(self._n_req, self.dv, self.dc, seed=self.seed, systematic=True, sparse=True)
         except Exception as e:
-            # try one more safe fallback: pick the next valid candidate divisor (larger one) and retry
             warnings.warn(f"make_ldpc failed for dv={self.dv}, dc={self.dc}: {e}. Trying alternative divisors of n.")
             tried = set([self.dc])
             success = False
@@ -273,7 +257,6 @@ class PyLDPCWrapper:
                     tried.add(alt)
                     continue
             if not success:
-                # Last resort: fallback to a stable small regular (dv=3, dc= (choose divisor>dv)) attempt
                 fallback_dc = next((d for d in n_divs if d > self.dv and d >= 3), None)
                 if fallback_dc is None:
                     raise RuntimeError("Failed to find any workable d_c for LDPC generation.")
@@ -282,11 +265,9 @@ class PyLDPCWrapper:
                 self.dv = 3
                 self.dc = int(fallback_dc)
 
-        # Store H,G (sparse)
         self.H = H if issparse(H) else sparse.csr_matrix(H)
         self.G = G if issparse(G) else sparse.csr_matrix(G)
     
-        # infer k,n,m from G (handle sparse shapes)
         gshape = self.G.shape if issparse(self.G) else np.array(self.G.shape)
         if gshape[0] < gshape[1]:
             self.k, self.n = int(gshape[0]), int(gshape[1])
@@ -306,7 +287,7 @@ class PyLDPCWrapper:
 
     @rate.setter
     def rate(self, value):
-        self._requested_rate = float(value)  # Re-init for new rate
+        self._requested_rate = float(value)  
 
     def encode(self, info_bits):
 
@@ -318,7 +299,6 @@ class PyLDPCWrapper:
         pad_len = num_blocks * self.k - info_bits.size
         info_p = np.concatenate([info_bits, np.zeros(pad_len, dtype=int)]) if pad_len > 0 else info_bits.copy()
 
-        # prepare dense G for safe fallback (if convertible)
         G_dense = None
         try:
             G_dense = self.G.toarray() if issparse(self.G) else np.asarray(self.G)
@@ -330,9 +310,7 @@ class PyLDPCWrapper:
             u = info_p[b * self.k : (b + 1) * self.k].astype(int)
             block_cw = None
 
-            # Try pyldpc.encode if present
             if getattr(self, "_pyldpc", False) and (pyldpc_encode is not None):
-                # determine likely good candidate orientations (preferring (n,k) tG)
                 try:
                     gshape = self.G.shape if issparse(self.G) else np.asarray(self.G).shape
                     if gshape[0] == self.k and gshape[1] == self.n:
@@ -346,14 +324,11 @@ class PyLDPCWrapper:
 
                 for cand in candidates:
                     try:
-                        # try with large snr kwarg first (deterministic BPSK-like result)
                         try:
                             cw = pyldpc_encode(cand, u, snr=1e6)
                         except TypeError:
-                            # signature may not accept snr
                             cw = pyldpc_encode(cand, u)
                         cw_arr = np.asarray(cw)
-                        # if encode returned floats (BPSK-like), threshold to bits
                         if np.issubdtype(cw_arr.dtype, np.floating):
                             cw_bits = (cw_arr < 0).astype(int)
                         else:
@@ -369,7 +344,6 @@ class PyLDPCWrapper:
                         block_cw = None
                         continue
 
-            # Fallback: binary multiply with dense generator matrix
             if block_cw is None:
                 if G_dense is None:
                     raise RuntimeError("pyldpc.encode failed and generator matrix is not available for fallback.")
@@ -495,16 +469,7 @@ class PilotHandler:
         # NOTE: intentionally stateless regarding per-mode pilot sequences/positions
 
     def insert_pilots_per_mode(self, data_symbols, mode_key):
-        """
-        Insert pilots into `data_symbols` for mode `mode_key`.
-        Pattern: 64-symbol preamble + comb pattern (pilots inserted before data symbols).
-        Returns (frame_with_pilots, pilot_positions, pilot_sequence).
-        This method is stateless with respect to per-mode pilots (caller must store results).
-        
-        Note: Comb pilots are inserted without dropping payload symbols, so frame length =
-        preamble + n_data + n_comb. Actual pilot ratio = (preamble + n_comb) / (frame length),
-        which may differ from self.pilot_ratio due to the fixed preamble length.
-        """
+
         rng = np.random.default_rng(_sha32_seed_from_tuple(mode_key))
         n_data = int(len(data_symbols))
         if n_data == 0:
@@ -551,9 +516,7 @@ class PilotHandler:
         return frame, pilot_positions, pilot_seq
 
     def extract_pilots(self, received_frame, pilot_positions):
-        """
-        Stateless extraction: returns (data_symbols, rx_pilots)
-        """
+
         rx_pil = received_frame[pilot_positions]
         mask = np.ones(len(received_frame), dtype=bool)
         mask[pilot_positions] = False
@@ -561,10 +524,7 @@ class PilotHandler:
         return data, rx_pil
 
     def estimate_channel(self, rx_pilots, tx_pilot_sequence=None, method="MMSE", turbulence_var=0.0, noise_var=1.0):
-        """
-        Estimate channel given rx_pilots and the *tx_pilot_sequence* (must be provided per-mode by caller).
-        If tx_pilot_sequence is None, fall back to unity scalar.
-        """
+
         if tx_pilot_sequence is None or len(rx_pilots) == 0:
             return 1.0 + 0j
         tx = tx_pilot_sequence[:len(rx_pilots)]
@@ -581,7 +541,6 @@ class PilotHandler:
             h = np.average(ratios_valid, weights=weights)
         return h if np.isfinite(h) else (1.0 + 0j)
 
-# ---------- encodingRunner ----------
 class encodingRunner:
     def __init__(
         self,
@@ -650,17 +609,12 @@ class encodingRunner:
         if symbols.size == 0:
             return FSO_MDM_Frame(tx_signals={})
 
-        # Even distribution per mode (pad with zeros if needed)
-        # Note: Padding with zeros (0+0j) is better than padding with a constellation point
-        # to avoid biasing the decoder. Zeros will be demodulated as (0,0) → (1+j)/√2,
-        # but this is more neutral than repeating a specific symbol.
         symbols_per_mode = len(symbols) // self.n_modes
         total_symbols = symbols_per_mode * self.n_modes
         if len(symbols) > total_symbols:
             symbols = symbols[:total_symbols]
         else:
-            # Pad with zeros (0+0j) instead of first constellation point
-            # This avoids biasing the decoder with repeated symbols
+
             pad_len = total_symbols - len(symbols)
             pad = np.zeros(pad_len, dtype=complex)
             symbols = np.concatenate([symbols, pad])
@@ -692,19 +646,13 @@ class encodingRunner:
                 rng = np.random.default_rng(seed + 123456)
                 pn += np.clip(jitter_rad * rng.standard_normal(n_mode), -np.pi, np.pi)
 
-            # Apply phase noise only to DATA symbols (not pilots)
-            # Pilots must remain known for channel estimation
-            # Create mask: True for data symbols, False for pilots
+
             is_pilot_mask = np.isin(np.arange(n_mode), pilot_pos)
             pn_data_only = pn.copy()
-            pn_data_only[is_pilot_mask] = 0.0  # Zero phase noise on pilots
+            pn_data_only[is_pilot_mask] = 0.0  
             
             frame_sym *= np.exp(1j * pn_data_only)
-            
-            # Power normalization: Normalize to unit average power per symbol
-            # This ensures consistent power across modes, but note that the actual
-            # optical power is determined by the beam field scaling (P_tx_watts parameter).
-            # This normalization is for digital symbol consistency, not optical power budget.
+
             if np.mean(np.abs(frame_sym)**2) > 0:
                 frame_sym /= np.sqrt(np.mean(np.abs(frame_sym)**2))
 
@@ -714,11 +662,11 @@ class encodingRunner:
                 "beam": beam,
                 "n_symbols": n_mode,
                 "pilot_positions": pilot_pos,
-                "pilot_sequence": pilot_seq,   # STORE per-mode pilot sequence explicitly
+                "pilot_sequence": pilot_seq,   
                 "phase_noise": pn,
             }
             if verbose:
-                print(f" Mode {mode_key}: n_symbols={n_mode}, pilots={len(pilot_pos)}")
+                print(f" Mode {mode_key} : n_symbols = {n_mode}, pilots = {len(pilot_pos)}")
             idx += symbols_per_mode
 
         frame = FSO_MDM_Frame(tx_signals=tx_signals, metadata={"pilot_ratio": self.pilot_handler.pilot_ratio})
@@ -761,7 +709,7 @@ class encodingRunner:
 
         n_symbols = max(s["n_symbols"] for s in tx_signals.values())
         if single_slice_if_large and n_symbols > 500:
-            warnings.warn(f"n_symbols={n_symbols}>500; single slice.")
+            warnings.warn(f"n_symbols = {n_symbols}>500; single slice.")
             n_symbols = 1
 
         if n_symbols <= 1:
@@ -788,70 +736,137 @@ class encodingRunner:
         return intensity_3d.astype(np.float32), grid
 
     def plot_system_summary(self, data_bits, frame, plot_dir="plots", save_name="encoding_summary.png"):
+        """
+        Generate high-resolution diagnostic plots for the transmitter.
+        Creates individual 600 dpi figures stored under plot_dir/encoding_summary.
+        Returns a dictionary of saved file paths.
+        """
         os.makedirs(plot_dir, exist_ok=True)
-        n_modes = len(self.spatial_modes)
-        rows = int(np.ceil(n_modes / 4))
-        fig = plt.figure(figsize=(16, 5 + 3 * rows))
-        fig.suptitle("FSO-MDM Transmitter Summary", fontsize=16, fontweight="bold")
+        summary_dir = os.path.join(plot_dir, "encoding_summary")
+        os.makedirs(summary_dir, exist_ok=True)
 
-        ax1 = plt.subplot2grid((2 + rows, 4), (0, 0))
-        self.qpsk.plot_constellation(ax=ax1)
+        saved_paths: Dict[str, str] = {}
 
-        ax2 = plt.subplot2grid((2 + rows, 4), (0, 1))
-        first = self.spatial_modes[0]
-        if first in frame.tx_signals:
-            syms = frame.tx_signals[first]["symbols"][:200]
-            ax2.plot(np.real(syms), np.imag(syms), ".", alpha=0.6)
-            ax2.set_title(f"Tx Symbols (mode {first})")
-            ax2.axis("equal")
-            ax2.grid(True)
+        # --- Figure 1: Ideal QPSK constellation
+        fig_const, ax_const = plt.subplots(figsize=(6, 6), constrained_layout=True)
+        self.qpsk.plot_constellation(ax=ax_const)
+        ax_const.set_title("Ideal QPSK Constellation", fontweight="bold")
+        const_path = os.path.join(summary_dir, "constellation.png")
+        fig_const.savefig(const_path, dpi=600, bbox_inches="tight")
+        saved_paths["constellation"] = const_path
+        plt.close(fig_const)
 
-        per_row = 4
-        extent_m = 3 * self.w0
-        gsize = 200
-        x = np.linspace(-extent_m, extent_m, gsize)
-        y = np.linspace(-extent_m, extent_m, gsize)
+        # --- Figure 2: Sample transmitted symbols for the first mode
+        # Ideal constellation reference
+        ideal_points = np.array(list(self.qpsk.constellation_map.values()))
+        ideal_bits = list(self.qpsk.constellation_map.keys())
+
+        for mode_key in self.spatial_modes:
+            sig = frame.tx_signals.get(mode_key, {})
+            frame_syms = np.asarray(sig.get("frame", sig.get("symbols", np.array([], dtype=complex))))
+            sample_syms = frame_syms[: min(800, frame_syms.size)] if frame_syms.size else np.array([], dtype=complex)
+
+            fig_tx, ax_tx = plt.subplots(figsize=(6, 6), constrained_layout=True)
+            if sample_syms.size:
+                ax_tx.scatter(sample_syms.real, sample_syms.imag, s=12, alpha=0.6, color="#1d4ed8")
+            ax_tx.set_title(f"Transmitted Symbols (mode {mode_key})", fontweight="bold")
+            ax_tx.set_xlabel("In-phase")
+            ax_tx.set_ylabel("Quadrature")
+            ax_tx.grid(True, alpha=0.3)
+            ax_tx.axhline(0, color="grey", linewidth=0.8)
+            ax_tx.axvline(0, color="grey", linewidth=0.8)
+            ax_tx.set_aspect("equal")
+            tx_path = os.path.join(summary_dir, f"tx_symbols_mode_{mode_key[0]}_{mode_key[1]}.png")
+            fig_tx.savefig(tx_path, dpi=600, bbox_inches="tight")
+            saved_paths[f"tx_symbols_mode_{mode_key}"] = tx_path
+            plt.close(fig_tx)
+
+            fig_overlay, ax_overlay = plt.subplots(figsize=(6, 6), constrained_layout=True)
+            for idx, pt in enumerate(ideal_points):
+                bits = ideal_bits[idx]
+                label = "Ideal" if idx == 0 else None
+                ax_overlay.scatter(pt.real, pt.imag, c="red", s=60, marker="o", label=label)
+                ax_overlay.annotate(f"{bits[0]}{bits[1]}", (pt.real + 0.015, pt.imag + 0.015), fontsize=11, color="red")
+            if sample_syms.size:
+                ax_overlay.scatter(sample_syms.real, sample_syms.imag, s=14, alpha=0.6, color="#1d4ed8", label="Transmitted")
+            ax_overlay.axhline(0, color="grey", linewidth=0.8)
+            ax_overlay.axvline(0, color="grey", linewidth=0.8)
+            ax_overlay.set_title(f"Ideal vs Transmitted (mode {mode_key})", fontweight="bold")
+            ax_overlay.set_xlabel("In-phase")
+            ax_overlay.set_ylabel("Quadrature")
+            ax_overlay.legend(loc="upper right")
+            ax_overlay.grid(True, alpha=0.3)
+            ax_overlay.set_aspect("equal")
+            overlay_path = os.path.join(summary_dir, f"mode_{mode_key[0]}_{mode_key[1]}_constellation_overlay.png")
+            fig_overlay.savefig(overlay_path, dpi=600, bbox_inches="tight")
+            saved_paths[f"constellation_overlay_mode_{mode_key}"] = overlay_path
+            plt.close(fig_overlay)
+
+        # --- Precompute grid for intensity maps ---
+        extent_full = max(0.2, 3 * self.w0)  # wide context view (≥ ±3w0)
+        gsize = 400
+        x = np.linspace(-extent_full, extent_full, gsize)
+        y = np.linspace(-extent_full, extent_full, gsize)
         X, Y = np.meshgrid(x, y, indexing="ij")
         R = np.sqrt(X**2 + Y**2)
         PHI = np.arctan2(Y, X)
 
-        for idx, mode_key in enumerate(self.spatial_modes):
-            row = idx // per_row
-            col = idx % per_row
-            ax = plt.subplot2grid((2 + rows, 4), (1 + row, col))
+        # --- Figures: per-mode intensity (lgBeam-style linear view only) ---
+        for mode_key in self.spatial_modes:
             beam = self.lg_beams.get(mode_key)
             if beam is None:
-                ax.text(0.5, 0.5, f"No beam\n{mode_key}", ha="center", va="center", transform=ax.transAxes)
-                ax.set_title(f"LG {mode_key}")
+                fig_placeholder, ax_placeholder = plt.subplots(figsize=(6, 5), constrained_layout=True)
+                ax_placeholder.text(0.5, 0.5, f"No beam\n{mode_key}", ha="center", va="center", transform=ax_placeholder.transAxes)
+                ax_placeholder.set_title(f"LG {mode_key}", fontweight="bold")
+                path = os.path.join(summary_dir, f"mode_{mode_key[0]}_{mode_key[1]}_intensity.png")
+                fig_placeholder.savefig(path, dpi=600, bbox_inches="tight")
+                saved_paths[f"mode_{mode_key}_intensity"] = path
+                plt.close(fig_placeholder)
                 continue
-            try:
-                I = beam.calculate_intensity(R, PHI, 0, P_tx_watts=self.power_per_mode)
-            except:
-                I = np.zeros_like(R)
-            maxI = np.max(I) if np.max(I) > 0 else 1.0
-            vmin = max(maxI * 1e-8, 1e-12)
-            im = ax.imshow(I, extent=[-extent_m*1e3, extent_m*1e3, -extent_m*1e3, extent_m*1e3], origin="lower",
-                           cmap="hot", norm=LogNorm(vmin=vmin, vmax=maxI))
-            ax.set_title(f"LG p={beam.p} l={beam.l} M²={beam.M_squared:.1f}")
-            ax.set_xlabel("x [mm]")
-            ax.set_ylabel("y [mm]")
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.01)
 
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        save_path = os.path.join(plot_dir, save_name)
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+            try:
+                intensity = beam.calculate_intensity(R, PHI, 0, P_tx_watts=self.power_per_mode)
+            except Exception:
+                intensity = np.zeros_like(R)
+
+            extent_zoom = min(3 * self.w0, extent_full)
+            zoom_mask = (np.abs(x) <= extent_zoom)
+            if np.count_nonzero(zoom_mask) <= 4:
+                zoom_mask = slice(None)
+                extent_zoom = extent_full
+            intensity_zoom = intensity[np.ix_(zoom_mask, zoom_mask)]
+
+            fig_lin, ax_lin = plt.subplots(figsize=(6, 5), constrained_layout=True)
+            im_lin = ax_lin.imshow(
+                intensity_zoom,
+                extent=[-extent_zoom * 1e3, extent_zoom * 1e3, -extent_zoom * 1e3, extent_zoom * 1e3],
+                origin="lower",
+                cmap="hot",
+                interpolation="bilinear",
+            )
+            ax_lin.set_title(f"LG p={beam.p}, l={beam.l} (M²={beam.M_squared:.1f})", fontweight="bold")
+            ax_lin.set_xlabel("x [mm]")
+            ax_lin.set_ylabel("y [mm]")
+            cbar_lin = fig_lin.colorbar(im_lin, ax=ax_lin, fraction=0.045, pad=0.04)
+            cbar_lin.set_label("Intensity [a.u.]")
+            linear_path = os.path.join(summary_dir, f"mode_{mode_key[0]}_{mode_key[1]}_intensity.png")
+            fig_lin.savefig(linear_path, dpi=600, bbox_inches="tight")
+            saved_paths[f"mode_{mode_key}_intensity"] = linear_path
+            plt.close(fig_lin)
+
         gc.collect()
-        return save_path
+
+        # Backward compatibility: optionally return original composite name pointing to summary directory
+        saved_paths["summary_dir"] = summary_dir
+        return saved_paths
 
     def validate_transmitter(self, frame, snr_db=10, max_modes=4):
-        print("\n--- Validation ---")
         tx = frame.tx_signals
         if not tx:
             print("No tx signals.")
             return
         keys = list(tx.keys())[:max_modes]
-        print("Orthogonality check (lgBeam.overlap_with):")
+        print(" - orthogonality check :")
         ortho_ok = True
         for i in range(len(keys)):
             for j in range(i + 1, len(keys)):
@@ -863,15 +878,15 @@ class encodingRunner:
                     continue
                 try:
                     ov = b1.overlap_with(b2, r_max_factor=8.0, n_r=512, n_phi=360)
-                    print(f"  <{k1}|{k2}> = {abs(ov):.4e}")
+                    print(f"  < {k1} | {k2} > = {abs(ov):.4e}")
                     if abs(ov) > 0.05:
                         ortho_ok = False
                 except:
                     print(f"  overlap_with missing for {k1}-{k2}")
                     ortho_ok = False
-        print("Orthogonality: " + ("PASS" if ortho_ok else "FAIL"))
+        print(" - orthogonality: " + ("PASS" if ortho_ok else "FAIL"))
 
-        print("M^2 check:")
+        print(" - M^2 check:")
         m2_ok = True
         for k, beam in self.lg_beams.items():
             if beam is None:
@@ -879,12 +894,12 @@ class encodingRunner:
                 m2_ok = False
                 continue
             expected = 2 * beam.p + abs(beam.l) + 1
-            print(f"  {k}: M²={beam.M_squared:.3f} (expected {expected:.3f})")
+            print(f"  {k}: M² = {beam.M_squared:.3f} (expected {expected:.3f})")
             if abs(beam.M_squared - expected) > 1e-6:
                 m2_ok = False
         print("M^2: " + ("PASS" if m2_ok else "FAIL"))
 
-        print("LDPC round-trip:")
+        print("- LDPC round-trip:")
         test_info = np.random.randint(0, 2, self.ldpc.k)
         test_coded = self.ldpc.encode(test_info)
         test_decoded = self.ldpc.decode_hard(test_coded)
@@ -910,29 +925,36 @@ class encodingRunner:
         minlen = min(len(rx_bits), len(tx_bits))
         ber_emp = np.mean(rx_bits[:minlen] != tx_bits[:minlen]) if minlen > 0 else 1.0
         ber_th = 0.5 * erfc(np.sqrt(snr_lin))
-        print(f"AWGN BER emp={ber_emp:.2e}, th={ber_th:.2e} @ {snr_db}dB")
-        print("Validation done.")
+        print(f"AWGN BER emp = {ber_emp:.2e}, th={ber_th:.2e} @ {snr_db}dB")
 
-# ---------- Demo ----------
+
 if __name__ == "__main__":
     WAVELENGTH = 1550e-9
     W0 = 25e-3
     SPATIAL_MODES = [(0, 1), (0, -1), (0, 2), (0, -2), (0, 3), (0, -3)]
-    FEC_RATE = 0.8
-    PILOT_RATIO = 0.1
+    FEC_RATE = 0.95          # high-rate code -> weaker error protection
+    PILOT_RATIO = 0.05       # fewer pilots for poorer channel tracking
     N_INFO_BITS = 4096
-    GRID_SIZE = 128
-    Z_PROP = 5000.0
+    GRID_SIZE = 512
+    Z_PROP = 1000
     PLOT_DIR = os.path.join(os.getcwd(), "plots")
     os.makedirs(PLOT_DIR, exist_ok=True)
 
-    runner = encodingRunner(spatial_modes=SPATIAL_MODES, wavelength=WAVELENGTH, w0=W0,
-                            fec_rate=FEC_RATE, pilot_ratio=PILOT_RATIO, symbol_time_s=1e-9,
-                            P_tx_watts=1.0, laser_linewidth_kHz=10.0, timing_jitter_ps=5.0)
+    runner = encodingRunner(
+        spatial_modes=SPATIAL_MODES,
+        wavelength=WAVELENGTH,
+        w0=W0,
+        fec_rate=FEC_RATE,
+        pilot_ratio=PILOT_RATIO,
+        symbol_time_s=1e-9,
+        P_tx_watts=0.2,             # lower transmit power
+        laser_linewidth_kHz=300.0,  # large phase noise
+        timing_jitter_ps=25.0,      # large timing jitter
+    )
 
     data = np.random.default_rng(123).integers(0, 2, N_INFO_BITS)
     frame = runner.transmit(data, generate_3d_field=False, z_field=Z_PROP, grid_size=GRID_SIZE)
-    runner.validate_transmitter(frame)
+    runner.validate_transmitter(frame, snr_db=0)  # low SNR to provoke high BER
     p = runner.plot_system_summary(data, frame, plot_dir=PLOT_DIR, save_name="encoding_summary.png")
     if p:
         print(f"Saved: {p}")

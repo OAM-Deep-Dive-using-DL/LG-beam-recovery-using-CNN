@@ -274,23 +274,12 @@ class LaguerreGaussianBeam:
 
 
 def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir="plots"):
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(f'Laguerre-Gaussian Beam Analysis: $LG_{{{beam.p}}}^{{{beam.l}}}$', 
-                 fontsize=20, fontweight='bold')
     
-    ax1 = axes[0, 0]
+    figures = []
+    saved_paths = []
+
     r_range = np.linspace(0, max_radius_mm * 1e-3, grid_size * 2) 
     intensity_profile = beam.calculate_intensity(r_range, 0, 0)
-    
-    ax1.plot(r_range * 1e3, intensity_profile, 'b-', linewidth=2)
-    ax1.axvline(beam.w0 * 1e3, color='r', linestyle='--', alpha=0.7, 
-                label=f'w₀={beam.w0 * 1e3:.1f}mm')
-    ax1.set_xlabel('Radial Position r [mm]')
-    ax1.set_ylabel('Intensity [a.u.]') 
-    ax1.set_title(f'Lateral Profile at z=0')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend()
     
     r_max_m = max_radius_mm * 1e-3
     x = np.linspace(-r_max_m, r_max_m, grid_size)
@@ -299,45 +288,14 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     R = np.sqrt(X**2 + Y**2)
     PHI = np.arctan2(Y, X) 
     
-    #===========================================
-    zField = 0
+    zField = 1000
     field_z0 = beam.generate_beam_field(R, PHI, zField)
-    #===========================================
     
     extent_mm = [x[0]*1e3, x[-1]*1e3, y[0]*1e3, y[-1]*1e3]
     
-    ax2 = axes[0, 1]
     intensity_z0 = np.abs(field_z0) ** 2 
-    
-    im2 = ax2.imshow(intensity_z0, 
-                     extent=extent_mm,
-                     cmap='hot', origin='lower', interpolation='bilinear')
-    ax2.set_xlabel('x [mm]')
-    ax2.set_ylabel('y [mm]')
-    ax2.set_title(f'Intensity at z=0')
-    ax2.set_aspect('equal')
-    cbar2 = plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-    cbar2.set_label('Intensity [a.u.]')
-
-    ax3 = axes[1, 0]
     phase_z0 = np.angle(field_z0) 
-    
-    im3 = ax3.imshow(phase_z0, 
-                     extent=extent_mm,
-                     cmap='twilight', origin='lower', interpolation='bilinear',
-                     vmin=-np.pi, vmax=np.pi)
-    ax3.set_xlabel('x [mm]')
-    ax3.set_ylabel('y [mm]')
-    ax3.set_title(f'Phase at z=0 (OAM={beam.l}ℏ)')
-    ax3.set_aspect('equal')
-    cbar3 = plt.colorbar(im3, ax=ax3, fraction=0.046, pad=0.04)
-    cbar3.set_label('Phase [rad]')
-    cbar3.set_ticks([-np.pi, 0, np.pi])
-    cbar3.set_ticklabels(['-π', '0', 'π'])
 
-
-    ax_long = axes[1, 1]
-    
     z_max = 3 * beam.z_R  
     num_z_steps = 150
     num_r_steps = 200
@@ -355,39 +313,113 @@ def plot_beam_analysis(beam, grid_size, max_radius_mm, save_fig=False, plot_dir=
     z_max_km = z_max / 1000
     r_max_mm = r_max_long * 1e3
     
-    im_long = ax_long.imshow(intensity_long, 
-                             extent=[0, z_max_km, -r_max_mm, r_max_mm],
-                             aspect='auto', cmap='hot', origin='lower', 
-                             interpolation='bilinear')
-    
-    # Overlay analytical w(z) as a sanity check
     w_z_array_mm = np.array([beam.beam_waist(z) * 1e3 for z in z_array])
+    
+    output_dir = os.path.join(plot_dir, f"lgBeam_p{beam.p}_l{beam.l}")
+    if save_fig:
+        os.makedirs(output_dir, exist_ok=True)
+
+    # --- Figure 1: Radial intensity profile ---
+    fig_profile, ax_profile = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    ax_profile.plot(r_range * 1e3, intensity_profile, 'b-', linewidth=2)
+    ax_profile.axvline(beam.w0 * 1e3, color='r', linestyle='--', alpha=0.7,
+                       label=f'w₀={beam.w0 * 1e3:.1f} mm')
+    ax_profile.set_xlabel('Radial Position r [mm]')
+    ax_profile.set_ylabel('Intensity [a.u.]')
+    ax_profile.set_title(f'Lateral Intensity Profile at z = {zField}')
+    ax_profile.grid(True, alpha=0.3)
+    ax_profile.legend()
+    figures.append(fig_profile)
+    if save_fig:
+        profile_path = os.path.join(output_dir, "radial_profile.png")
+        fig_profile.savefig(profile_path, dpi=1200, bbox_inches='tight')
+        saved_paths.append(profile_path)
+
+    # --- Figure 2: Transverse intensity map ---
+    fig_intensity, ax_intensity = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    im_intensity = ax_intensity.imshow(
+        intensity_z0,
+        extent=extent_mm,
+        cmap='hot',
+        origin='lower',
+        interpolation='bilinear',
+    )
+    ax_intensity.set_xlabel('x [mm]')
+    ax_intensity.set_ylabel('y [mm]')
+    ax_intensity.set_title(f'Transverse Intensity at z = {zField}')
+    ax_intensity.set_aspect('equal')
+    cbar_intensity = fig_intensity.colorbar(im_intensity, ax=ax_intensity, fraction=0.045, pad=0.04)
+    cbar_intensity.set_label('Intensity [a.u.]')
+    figures.append(fig_intensity)
+    if save_fig:
+        intensity_path = os.path.join(output_dir, "transverse_intensity.png")
+        fig_intensity.savefig(intensity_path, dpi=1200, bbox_inches='tight')
+        saved_paths.append(intensity_path)
+
+    # --- Figure 3: Transverse phase map ---
+    fig_phase, ax_phase = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    im_phase = ax_phase.imshow(
+        phase_z0,
+        extent=extent_mm,
+        cmap='twilight',
+        origin='lower',
+        interpolation='bilinear',
+        vmin=-np.pi,
+        vmax=np.pi,
+    )
+    ax_phase.set_xlabel('x [mm]')
+    ax_phase.set_ylabel('y [mm]')
+    ax_phase.set_title(f'Transverse Phase at z = {zField} (OAM = {beam.l}ℏ)')
+    ax_phase.set_aspect('equal')
+    cbar_phase = fig_phase.colorbar(im_phase, ax=ax_phase, fraction=0.045, pad=0.04)
+    cbar_phase.set_label('Phase [rad]')
+    cbar_phase.set_ticks([-np.pi, 0, np.pi])
+    cbar_phase.set_ticklabels(['-π', '0', 'π'])
+    figures.append(fig_phase)
+    if save_fig:
+        phase_path = os.path.join(output_dir, "transverse_phase.png")
+        fig_phase.savefig(phase_path, dpi=1200, bbox_inches='tight')
+        saved_paths.append(phase_path)
+
+    # --- Figure 4: Longitudinal propagation ---
+    fig_long, ax_long = plt.subplots(figsize=(10, 6), constrained_layout=True)
+    im_long = ax_long.imshow(
+        intensity_long,
+        extent=[0, z_max_km, -r_max_mm, r_max_mm],
+        aspect='auto',
+        cmap='hot',
+        origin='lower',
+        interpolation='bilinear',
+    )
     ax_long.plot(z_array_km, w_z_array_mm, 'c--', linewidth=2.5, label='w(z)')
     ax_long.plot(z_array_km, -w_z_array_mm, 'c--', linewidth=2.5)
-    
-    # Mark the Rayleigh range
-    ax_long.axvline(beam.z_R / 1000, color='lime', linestyle=':', linewidth=2.5,
-                   label=f'z_R={beam.z_R / 1000:.3f}km', alpha=0.8)
-    
+    ax_long.axvline(
+        beam.z_R / 1000,
+        color='lime',
+        linestyle=':',
+        linewidth=2.5,
+        label=f'z_R = {beam.z_R / 1000:.3f} km',
+        alpha=0.8,
+    )
     ax_long.set_xlabel('Propagation Distance z [km]', fontsize=12)
     ax_long.set_ylabel('Radial Position r [mm]', fontsize=12)
-    ax_long.set_title(f'Longitudinal Propagation (M²={beam.M_squared})',
-                     fontsize=13)
+    ax_long.set_title(f'Longitudinal Propagation (M² = {beam.M_squared})', fontsize=13)
     ax_long.legend(loc='upper right', fontsize=11, framealpha=0.9)
     ax_long.grid(True, alpha=0.3)
-    plt.colorbar(im_long, ax=ax_long, label='Intensity [a.u.]', 
-                 fraction=0.046, pad=0.04)
-    
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) 
-    
+    cbar_long = fig_long.colorbar(im_long, ax=ax_long, fraction=0.045, pad=0.04)
+    cbar_long.set_label('Intensity [a.u.]')
+    figures.append(fig_long)
     if save_fig:
-        os.makedirs(plot_dir, exist_ok=True)
-        fig_name = f"lg_p{beam.p}_l{beam.l}_beam.png"
-        save_path = os.path.join(plot_dir, fig_name)
-        print(f"Saving figure to {save_path}")
-        plt.savefig(save_path, dpi=600, bbox_inches='tight')  # IEEE compliance: 600 DPI 
-    
-    plt.show()
+        long_path = os.path.join(output_dir, "longitudinal_propagation.png")
+        fig_long.savefig(long_path, dpi=1200, bbox_inches='tight')
+        saved_paths.append(long_path)
+
+    if save_fig:
+        print(f"Saved LG beam analysis figures to {output_dir}:")
+        for path in saved_paths:
+            print(f"  • {path}")
+
+    return figures
 
 
 
@@ -396,7 +428,7 @@ def main():
     WAVELENGTH = 1550e-9  
     W0 = 25e-3           
     P_MODE = 0         
-    L_MODE = 1          
+    L_MODE = 2          
     GRID_SIZE = 200       
     MAX_RADIUS_MM = 75   
     SAVE_FIGURE = True  

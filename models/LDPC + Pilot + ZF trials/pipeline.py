@@ -33,61 +33,33 @@ except ImportError as e:
 
 np.random.seed(42)
 
-# ============================================================================
-# GLOBAL SYSTEM CONFIGURATION
-# ============================================================================
+
 class SimulationConfig:
-    """
-    Centralized configuration for a realistic FSO-OAM system 
-    for research purposes.
-    """
-    # --- Optical Parameters ---
     WAVELENGTH = 1550e-9  # [m]
     W0 = 25e-3           # [m]
-    
-    # --- Link Parameters ---
-    DISTANCE = 800      # [m]
+    DISTANCE = 1000      # [m]
     RECEIVER_DIAMETER = 0.3  # [m]
-    P_TX_TOTAL_W = 1.0     # [W] – now used for scaling
-    
-    # --- Spatial Modes ---
-    SPATIAL_MODES = [
-    (0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4), (1, -1), (1, 1)]
-    
-    # --- Turbulence Parameters (TRUE IDEAL) ---
-    CN2 = 1e-18           # [m^(-2/3)] 
+    P_TX_TOTAL_W = 1.0  
+    SPATIAL_MODES = [(0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4), (1, -1), (1, 1)]
+    CN2 = 7e-15           # [m^(-2/3)] 
     L0 = 10.0           # [m]
     L0_INNER = 0.005    # [m]
-    NUM_SCREENS = 10   
+    NUM_SCREENS = 15   
     CN2_MODEL = "uniform"  # Horizontal path → uniform profile; set "hufnagel_valley" for vertical links
-    
-    # --- Weather Condition ---
     WEATHER = 'clear'    
-    
-    # --- Communication Parameters (TRUE IDEAL) ---
     FEC_RATE = 0.8      
     PILOT_RATIO = 0.1   
-    
-    # FIXED: Multiple of total k_ldpc = FEC_RATE * 1024 * n_modes
-    N_INFO_BITS = 819 * 8  # 4914 bits (k=819 per codeword, 6 modes equiv)
-    
-    # --- Simulation Grid ---
-    N_GRID = 512        # 512x512 is fast for a sanity check
+    N_INFO_BITS = 819 * 8  # Multiple of total k_ldpc = FEC_RATE * 1024 * n_modes
+    N_GRID = 512        
     OVERSAMPLING = 2    
+    EQ_METHOD = 'auto'  
+    ADD_NOISE = False  
+    SNR_DB = 35      
     
-    # --- Receiver Configuration (TRUE IDEAL) ---
-    EQ_METHOD = 'auto'  # Auto-select MMSE when H is small (more robust than ZF)
-    ADD_NOISE = False   # Disable additive noise
-    SNR_DB = 50        # Set to a high dummy value
-    
-    # --- Output ---
-    PLOT_DIR = os.path.join(SCRIPT_DIR, "e2e_results_ideal") # New folder
-    DPI = 600  # IEEE compliance (600 DPI for figures)
-    ENABLE_POWER_PROBE = True  # Toggle numerical power probe diagnostic
+    PLOT_DIR = os.path.join(SCRIPT_DIR, "e2e_results_ideal")
+    DPI = 1200  
+    ENABLE_POWER_PROBE = True 
 
-# ============================================================================
-# NEW E2E SIMULATION (RECTIFIED)
-# ============================================================================
 
 def run_e2e_simulation(config):
     """
@@ -97,10 +69,6 @@ def run_e2e_simulation(config):
     your existing files.
     """
     
-    # === 1. INITIALIZATION ===
-    print("\n" + "="*80)
-    print("INITIALIZING E2E SIMULATION")
-    print("="*80)
     
     cfg = config
     n_modes = len(cfg.SPATIAL_MODES)
@@ -175,10 +143,6 @@ def run_e2e_simulation(config):
         ldpc_instance=transmitter.ldpc  # CRITICAL: Share LDPC instance to ensure same H matrix!
     )
 
-    # === 2. TRANSMITTER ===
-    print("\n" + "="*80)
-    print("STAGE 1: TRANSMITTER")
-    print("="*80)
     
     # Generate original data bits
     data_bits = np.random.randint(0, 2, cfg.N_INFO_BITS)
@@ -214,10 +178,7 @@ def run_e2e_simulation(config):
     print(f"    (Simulation will truncate to minimum frame length: {n_symbols} symbols)")
     print(f"    Pilot positions: {len(pilot_pos)} pilots per mode")
 
-    # === 3. PHYSICAL CHANNEL ===
-    print("\n" + "="*80)
-    print("STAGE 2: PHYSICAL CHANNEL (QUASI-STATIC)")
-    print("="*80)
+
     
     # 3a. Create one "frozen" snapshot of the atmosphere
     print(f"[1] Generating {cfg.NUM_SCREENS} phase screens for one channel snapshot...")
@@ -392,10 +353,6 @@ def run_e2e_simulation(config):
         E_tx_visualization += tx_basis_fields[mode_key] * sample_syms[i]
     E_rx_visualization = E_rx_sequence[0] 
 
-    # === 4. RECEIVER ===
-    print("\n" + "="*80)
-    print("STAGE 3: DIGITAL RECEIVER")
-    print("="*80)
     
     # Pass the *entire sequence of fields* to the receiver
     # NOTE: tx_frame.grid_info is now set (line 183), so receiver can use it directly
@@ -407,19 +364,15 @@ def run_e2e_simulation(config):
         verbose=True
     )
 
-    # === 5. RESULTS ===
-    print("\n" + "="*80)
-    print("E2E SIMULATION COMPLETE - FINAL RESULTS")
-    print("="*80)
+
     print(f"    TURBULENCE: Cn² = {cfg.CN2:.2e} (m^-2/3)")
     print(f"    LINK: {cfg.DISTANCE} m, {cfg.NUM_SCREENS} screens")
     print(f"    SNR: {cfg.SNR_DB} dB")
     print(f"    EQUALIZER: {cfg.EQ_METHOD.upper()}")
-    print(f"    -----------------------------------")
     print(f"    TOTAL INFO BITS: {metrics['total_bits']}")
     print(f"    BIT ERRORS:      {metrics['bit_errors']}")
     print(f"    FINAL BER:       {metrics['ber']:.4e}")
-    print("="*80)
+
     
     # Store results for plotting
     results = {
@@ -561,13 +514,68 @@ def plot_e2e_results(results, save_path=None):
     return fig
 
 
+def plot_symbol_comparison(results, save_path=None, max_points=512):
+    """
+    Plot transmitted vs received constellations per spatial mode.
+    """
+    metrics = results.get("metrics", {})
+    cfg = results.get("config")
+    tx_samples = metrics.get("tx_symbols_sample")
+    rx_samples = metrics.get("rx_symbols_sample")
+    if rx_samples is None:
+        print("Symbol comparison plot skipped: receiver metrics missing rx_symbols_sample.")
+        return None
+
+    modes = cfg.SPATIAL_MODES if cfg is not None else list(range(rx_samples.shape[0]))
+    n_modes = len(modes)
+    rows = int(np.ceil(n_modes / 3))
+    cols = min(n_modes, 3)
+    figsize = (6 * cols, 6 * rows)
+    fig, axes = plt.subplots(rows, cols, figsize=figsize, squeeze=False, constrained_layout=True)
+    fig.suptitle("Transmitted vs Received Constellations per Mode", fontsize=18, fontweight="bold")
+
+    for idx, mode_key in enumerate(modes):
+        r = idx // cols
+        c = idx % cols
+        ax = axes[r][c]
+        rx = rx_samples[idx]
+        if max_points is not None and max_points > 0:
+            rx = rx[:max_points]
+        ax.scatter(rx.real, rx.imag, s=10, alpha=0.5, color="#d97706", label="RX (post-eq)")
+        if tx_samples is not None:
+            tx = tx_samples[idx]
+            if max_points is not None and max_points > 0:
+                tx = tx[:max_points]
+            ax.scatter(tx.real, tx.imag, s=10, alpha=0.5, color="#1d4ed8", label="TX (pre-channel)")
+        ax.set_title(f"Mode {mode_key}", fontweight="bold")
+        ax.set_xlabel("In-phase")
+        ax.set_ylabel("Quadrature")
+        ax.grid(True, alpha=0.3)
+        ax.axhline(0, color="grey", linewidth=0.8)
+        ax.axvline(0, color="grey", linewidth=0.8)
+        ax.set_aspect("equal")
+        ax.legend(loc="upper right", fontsize=9)
+
+    # Hide unused axes if any
+    total_axes = rows * cols
+    for idx in range(n_modes, total_axes):
+        r = idx // cols
+        c = idx % cols
+        fig.delaxes(axes[r][c])
+
+    if save_path:
+        plot_directory = os.path.dirname(save_path)
+        os.makedirs(plot_directory, exist_ok=True)
+        fig.savefig(save_path, dpi=cfg.DPI if cfg is not None else 1200, bbox_inches="tight")
+        print(f"✓ Symbol comparison plot saved to: {save_path}")
+    return fig
+
+
 def run_cn2_sweep(config_class, cn2_values, enable_power_probe=False, save_plots=False):
     """
     Sweep through a list of Cn² values and record BER / conditioning metrics.
     """
-    print("\n" + "="*80)
-    print("CN² SWEEP: BEGIN")
-    print("="*80)
+    
 
     summary = []
     for idx, cn2 in enumerate(cn2_values, start=1):
@@ -595,6 +603,8 @@ def run_cn2_sweep(config_class, cn2_values, enable_power_probe=False, save_plots
             os.makedirs(sweep_dir, exist_ok=True)
             plot_path = os.path.join(sweep_dir, f"cn2_{cn2:.2e}.png")
             plot_e2e_results(results, save_path=plot_path)
+            symbol_path = os.path.join(sweep_dir, f"cn2_{cn2:.2e}_symbols.png")
+            plot_symbol_comparison(results, save_path=symbol_path)
 
     print("\nSweep Summary:")
     print(f"{'CN² (m^-2/3)':>14} | {'BER':>10} | {'Bit Err':>8} | {'cond(H)':>10} | {'Coded BER':>10}")
@@ -603,8 +613,6 @@ def run_cn2_sweep(config_class, cn2_values, enable_power_probe=False, save_plots
         coded_str = f"{row['coded_ber']:.3e}" if row['coded_ber'] is not None else "n/a"
         print(f"{row['cn2']:.2e} | {row['ber']:.3e} | {row['bit_errors']:8d} | {row['cond_H']:.3e} | {coded_str:>10}")
 
-    print("\nCN² SWEEP: COMPLETE")
-    print("="*80)
     return summary
 
 # ============================================================================
@@ -650,6 +658,8 @@ if __name__ == "__main__":
         if results:
             save_file = os.path.join(config.PLOT_DIR, "e2e_simulation_results.png")
             fig = plot_e2e_results(results, save_path=save_file)
+            symbol_file = os.path.join(config.PLOT_DIR, "e2e_symbol_comparison.png")
+            symbol_fig = plot_symbol_comparison(results, save_path=symbol_file)
             plt.show()
         else:
             print("✗ Simulation failed to produce results.")

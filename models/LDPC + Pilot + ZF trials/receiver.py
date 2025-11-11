@@ -40,9 +40,7 @@ except Exception:
 warnings.filterwarnings("ignore")
 
 
-# ---------------------------
-# Utilities
-# ---------------------------
+
 def reconstruct_grid_from_gridinfo(grid_info: Dict[str, Any]):
     if grid_info is None:
         raise ValueError("grid_info is required to reconstruct spatial grid.")
@@ -66,9 +64,6 @@ def energy_normalize_field(field: np.ndarray, delta: float):
     return field
 
 
-# ---------------------------
-# OAM Demultiplexer
-# ---------------------------
 class OAMDemultiplexer:
     def __init__(self, spatial_modes, wavelength, w0, z_distance, angular_prop_func=angular_spectrum_propagation):
         self.spatial_modes = list(spatial_modes)
@@ -173,28 +168,19 @@ class OAMDemultiplexer:
                     if mode_key in scaling_factors:
                         scaling_factor = scaling_factors[mode_key]
 
-            # CRITICAL FIX: Apply scaling BEFORE propagation (to match TX basis fields)
-            # TX basis fields are scaled at z=0, then propagated
-            # Reference fields should follow the same order
+           
             ref = self.reference_field(mode_key, X, Y, delta, grid_z=self.z_distance, 
                                       tx_beam_obj=tx_beam_obj, scaling_factor=scaling_factor)
             
-            # CRITICAL FIX: Apply same attenuation as E_rx to match received field
-            # E_rx has: actual power (P_tx after propagation), then ×amplitude_loss, then ×aperture_mask
-            # E_ref should have: actual power (P_tx after propagation), then ×amplitude_loss, then ×aperture_mask
-            # Note: We no longer normalize to unit power - power is preserved through propagation
+
             if tx_frame is not None and hasattr(tx_frame, 'metadata') and tx_frame.metadata is not None:
                 amplitude_loss = tx_frame.metadata.get('amplitude_loss', 1.0)
                 ref = ref * amplitude_loss  # Apply attenuation to match E_rx
             
-            # Note: E_rx already has aperture mask applied in pipeline.py (line 339)
-            # So we should NOT apply it again here. However, for consistency with reference field,
-            # we apply the mask to both E_rx and ref for the projection calculation.
-            # The mask application is idempotent (mask * mask = mask), so it's safe.
+
             ref_ap = ref * aperture_mask
             ref_energy = np.sum(np.abs(ref_ap) ** 2) * dA
-            # Apply aperture mask to E_rx for projection (even though it's already applied)
-            # This ensures both fields are masked consistently
+
             E_rx_masked = E_rx * aperture_mask
             projection = np.sum(E_rx_masked * np.conj(ref_ap)) * dA
             
@@ -236,9 +222,6 @@ class OAMDemultiplexer:
         return symbols_per_mode
 
 
-# ---------------------------
-# Channel estimator
-# ---------------------------
 class ChannelEstimator:
     def __init__(self, pilot_handler: PilotHandler, spatial_modes):
         self.pilot_handler = pilot_handler
@@ -341,9 +324,7 @@ class ChannelEstimator:
         return self.noise_var_est
 
 
-# ---------------------------
-# FSORx: Full receiver pipeline
-# ---------------------------
+
 class FSORx:
     def __init__(self, spatial_modes, wavelength, w0, z_distance, pilot_handler: PilotHandler, ldpc_instance: Optional[PyLDPCWrapper] = None, eq_method: str = "zf", receiver_radius: Optional[float] = None):
         self.spatial_modes = list(spatial_modes)
@@ -388,9 +369,7 @@ class FSORx:
             metrics: Dictionary with BER, H_est, noise_var, cond_H, etc.
         """
         if verbose:
-            print("\n" + "=" * 72)
-            print("FSO-OAM Receiver: Start")
-            print("=" * 72)
+            print("")
 
         grid_info = tx_frame.grid_info
         if grid_info is None:
@@ -504,6 +483,7 @@ class FSORx:
         s_est_flat = S_est.flatten(order='C')  # 'C' = row-major = mode-major
 
         tx_coded_bits = None
+        tx_symbol_matrix = None
         if tx_frame is not None:
             try:
                 tx_data_matrix = []
@@ -512,10 +492,12 @@ class FSORx:
                     frame_syms = np.asarray(sig.get("frame", sig.get("symbols")))
                     tx_data_matrix.append(frame_syms[data_mask])
                 tx_data_matrix = np.vstack(tx_data_matrix)
+                tx_symbol_matrix = tx_data_matrix.copy()
                 tx_data_flat = tx_data_matrix.flatten(order='C')
                 tx_coded_bits = self.qpsk.demodulate_hard(tx_data_flat)
             except Exception:
                 tx_coded_bits = None
+                tx_symbol_matrix = None
 
         IDEAL_THRESHOLD = 1e-4
         if noise_var < IDEAL_THRESHOLD:
@@ -618,9 +600,16 @@ class FSORx:
         if coded_ber_metric is not None:
             self.metrics["coded_ber"] = float(coded_ber_metric)
 
+        # Store symbol samples for diagnostic plots
+        sample_lim = min(N_data, 512)
+        if sample_lim > 0:
+            self.metrics["rx_symbols_sample"] = S_est[:, :sample_lim].copy()
+            if tx_symbol_matrix is not None:
+                self.metrics["tx_symbols_sample"] = tx_symbol_matrix[:, :sample_lim].copy()
+            self.metrics["symbol_sample_count"] = int(sample_lim)
+
         if verbose:
             print(f"   Original bits: {L_orig}, Decoded bits: {L_rec}, Errors: {bit_errors}, BER={ber:.3e}")
-            print("=" * 72)
 
         return decoded_info_bits, self.metrics
 
@@ -664,9 +653,7 @@ class FSORx:
         return self.receive_frame(E_rx_sequence, tx_frame, original_data_bits, verbose=verbose, bypass_ldpc=False)
 
 
-# ---------------------------
-# Plot helper
-# ---------------------------
+
 def plot_constellation(rx_symbols, title="Received Constellation"):
     plt.figure(figsize=(5, 5))
     plt.plot(np.real(rx_symbols), np.imag(rx_symbols), ".", alpha=0.6)
@@ -680,9 +667,6 @@ def plot_constellation(rx_symbols, title="Received Constellation"):
     plt.show()
 
 
-# ---------------------------
-# Demo main (rectified)
-# ---------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Receiver demo for FSO-MDM OAM (lightweight).")
     parser.add_argument("--realistic", action="store_true", help="Do NOT orthonormalize spatial refs (use realistic, possibly ill-conditioned refs).")
@@ -762,7 +746,7 @@ if __name__ == "__main__":
 
         return rx_fields, tx_sym_matrix, refs_stack
 
-    # ---- Build conservative demo tx_frame ----
+
     from encoding import FSO_MDM_Frame
 
     N_demo = 256
@@ -850,13 +834,12 @@ if __name__ == "__main__":
         print("DEBUG: original_coded_bits (len):", len(original_coded_bits))
 
     # Run the receiver (bypass LDPC by default in demo)
-    print("Running FSORx.receive_frame() ...")
     decoded_bits, metrics = fsorx.receive_frame(rx_fields, tx_frame, original_coded_bits, verbose=not args.debug, bypass_ldpc=True)
 
     # diagnostics plots (safe-guarded)
     try:
         plt.figure(figsize=(6,5))
-        plt.title("Example received intensity (frame 0)")
+        plt.title("received intensity (frame 0)")
         plt.imshow(np.abs(rx_fields[0])**2, origin="lower")
         plt.colorbar(label="Intensity [a.u.]")
         plt.show()
