@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import typing
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -18,7 +19,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
 from cnn_model import NeuralDemuxConfig, OAMNeuralDemultiplexer
-from train_cnn import OAMH5Dataset, _load_meta
+from train_cnn import OAMH5Dataset, _load_meta, _qpsk_index_to_bits
 
 
 matplotlib.use("Agg")
@@ -76,10 +77,14 @@ def _evaluate_split(
         "accuracy": 0.0,
     }
     total_samples = 0
+    total_bit_errors = 0
+    total_bits = 0
     preds_per_mode: List[List[int]] = []
     targets_per_mode: List[List[int]] = []
     pred_symbols: List[List[np.ndarray]] = []
     true_symbols: List[List[np.ndarray]] = []
+    per_mode_bit_errors: typing.Optional[np.ndarray] = None
+    per_mode_bit_totals: typing.Optional[np.ndarray] = None
 
     progress = tqdm(loader, desc="eval", leave=False)
     for batch in progress:
@@ -87,6 +92,7 @@ def _evaluate_split(
         pilot_mask = batch["pilot_mask"].to(device)
         target_indices = batch["class_index"].to(device)
         target_symbols = batch["symbols"].to(device)
+        target_bits = batch["bits"].to(device)
 
         out = model(field, pilot_mask=pilot_mask)
         logits = out["class_logits"].view(field.size(0), model.n_modes, 4)
@@ -98,6 +104,10 @@ def _evaluate_split(
 
         pred_idx = logits.argmax(dim=-1)
         correct = (pred_idx == target_indices).float().sum()
+        pred_bits = _qpsk_index_to_bits(pred_idx).to(device)
+        pred_bits_int = pred_bits.to(torch.int64)
+        target_bits_int = target_bits.to(torch.int64)
+        bit_errors = (pred_bits_int != target_bits_int)
 
         batch_size = field.size(0)
         metrics["loss"] += loss.item() * batch_size
@@ -105,23 +115,31 @@ def _evaluate_split(
         metrics["symbol_mse"] += mse_loss.item() * batch_size
         metrics["accuracy"] += correct.item()
         total_samples += batch_size
+        total_bit_errors += bit_errors.sum().item()
+        total_bits += target_bits_int.numel()
 
         if not preds_per_mode:
             preds_per_mode = [[] for _ in range(model.n_modes)]
             targets_per_mode = [[] for _ in range(model.n_modes)]
             pred_symbols = [[] for _ in range(model.n_modes)]
             true_symbols = [[] for _ in range(model.n_modes)]
+            per_mode_bit_errors = np.zeros(model.n_modes, dtype=np.float64)
+            per_mode_bit_totals = np.zeros(model.n_modes, dtype=np.float64)
 
         pred_cpu = pred_idx.cpu().numpy()
         target_cpu = target_indices.cpu().numpy()
         sym_pred_cpu = out["symbol"].cpu().numpy()
         sym_true_cpu = target_symbols.cpu().numpy()
+        bit_errors_per_mode = bit_errors.sum(dim=2).cpu().numpy()
 
         for mode in range(model.n_modes):
             preds_per_mode[mode].extend(pred_cpu[:, mode].tolist())
             targets_per_mode[mode].extend(target_cpu[:, mode].tolist())
             pred_symbols[mode].append(sym_pred_cpu[:, mode, :])
             true_symbols[mode].append(sym_true_cpu[:, mode, :])
+            if per_mode_bit_errors is not None and per_mode_bit_totals is not None:
+                per_mode_bit_errors[mode] += float(bit_errors_per_mode[:, mode].sum())
+                per_mode_bit_totals[mode] += float(batch_size * bit_errors.size(2))
 
     if total_samples == 0:
         raise RuntimeError("Empty split encountered during evaluation.")
@@ -129,10 +147,15 @@ def _evaluate_split(
     for key in ("loss", "ce", "symbol_mse"):
         metrics[key] /= total_samples
     metrics["accuracy"] /= (total_samples * model.n_modes)
+    if total_bits > 0:
+        metrics["ber"] = total_bit_errors / total_bits
+    else:
+        metrics["ber"] = float("nan")
 
     confusion: List[np.ndarray] = []
     per_mode_accuracy: List[float] = []
     per_mode_mse: List[float] = []
+    per_mode_ber: List[float] = []
     symbol_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
     for mode in range(model.n_modes):
         preds = np.asarray(preds_per_mode[mode], dtype=np.int64)
@@ -143,12 +166,17 @@ def _evaluate_split(
         true_sym = np.concatenate(true_symbols[mode], axis=0)
         per_mode_mse.append(float(np.mean((pred_sym - true_sym) ** 2)))
         symbol_pairs.append((pred_sym, true_sym))
+        if per_mode_bit_errors is not None and per_mode_bit_totals is not None and per_mode_bit_totals[mode] > 0:
+            per_mode_ber.append(float(per_mode_bit_errors[mode] / per_mode_bit_totals[mode]))
+        else:
+            per_mode_ber.append(float("nan"))
 
     return {
         "metrics": metrics,
         "confusion": confusion,
         "per_mode_accuracy": per_mode_accuracy,
         "per_mode_symbol_mse": per_mode_mse,
+        "per_mode_bit_ber": per_mode_ber,
         "symbols": symbol_pairs,
     }
 
@@ -321,6 +349,7 @@ def main() -> None:
         metrics = result["metrics"]
         metrics["per_mode_accuracy"] = result["per_mode_accuracy"]
         metrics["per_mode_symbol_mse"] = result["per_mode_symbol_mse"]
+        metrics["per_mode_bit_ber"] = result["per_mode_bit_ber"]
         summary["splits"][split_name] = metrics
 
         for mode_idx, mode in enumerate(meta.spatial_modes):

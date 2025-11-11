@@ -168,6 +168,9 @@ class NeuralDemuxConfig:
     transformer_layers: int = 2
     transformer_dim: int = 128
     use_checkpoint: bool = False
+    dropout: float = 0.0
+    transformer_dropout: float = 0.0
+    stochastic_depth_prob: float = 0.0
 
 
 def _make_grid(extent: float, size: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -209,7 +212,7 @@ def _downsample_tensor(t: torch.Tensor, target_size: int) -> torch.Tensor:
 class PilotAwareAttention(nn.Module):
     """Lightweight transformer with pilot-aware masking."""
 
-    def __init__(self, dim: int, heads: int, layers: int) -> None:
+    def __init__(self, dim: int, heads: int, layers: int, dropout: float = 0.0) -> None:
         super().__init__()
         self.pilot_gain = nn.Parameter(torch.tensor(0.5))
         encoder_layer = nn.TransformerEncoderLayer(
@@ -218,6 +221,7 @@ class PilotAwareAttention(nn.Module):
             dim_feedforward=dim * 4,
             batch_first=True,
             activation="gelu",
+            dropout=dropout,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=layers)
 
@@ -262,17 +266,18 @@ class OAMNeuralDemultiplexer(nn.Module):
         self.n_modes = len(config.spatial_modes)
         self.use_checkpoint = config.use_checkpoint
         self.stem = ComplexConv2d(1, config.feature_channels, kernel_size=5)
-        self.res1 = ComplexResidualBlock(config.feature_channels)
+        self.res1 = ComplexResidualBlock(config.feature_channels, dropout=config.dropout)
         self.down1 = ComplexConv2d(config.feature_channels, config.feature_channels * 2, stride=2)
-        self.res2 = ComplexResidualBlock(config.feature_channels * 2)
+        self.res2 = ComplexResidualBlock(config.feature_channels * 2, dropout=config.dropout)
         self.down2 = ComplexConv2d(config.feature_channels * 2, config.feature_channels * 4, stride=2)
-        self.res3 = ComplexResidualBlock(config.feature_channels * 4)
+        self.res3 = ComplexResidualBlock(config.feature_channels * 4, dropout=config.dropout)
         # Convert complex feature map to real embedding for transformer
         self.conv_real_proj = nn.Conv2d(config.feature_channels * 4 * 3, config.transformer_dim, kernel_size=1)
         self.attention = PilotAwareAttention(
             dim=config.transformer_dim,
             heads=config.transformer_heads,
             layers=config.transformer_layers,
+            dropout=config.transformer_dropout,
         )
         self.mode_head = ModePoolingHead(config.transformer_dim, config.transformer_dim * 2, self.n_modes)
         self.register_buffer(
