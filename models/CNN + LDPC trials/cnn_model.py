@@ -244,21 +244,11 @@ class ModePoolingHead(nn.Module):
 
     def forward(self, pooled: torch.Tensor) -> Dict[str, torch.Tensor]:
         # Clamp pooled values to prevent extreme magnitudes that cause NaN
-        pooled = torch.clamp(pooled, min=-100.0, max=100.0)
         x = self.norm(pooled)
-        # Clamp after normalization to prevent extreme values
-        x = torch.clamp(x, min=-50.0, max=50.0)
         h = self.fc1(x)
-        # Clamp before activation to prevent overflow
-        h = torch.clamp(h, min=-50.0, max=50.0)
         h = self.act(h)
-        # Clamp after activation
-        h = torch.clamp(h, min=-50.0, max=50.0)
         class_logits = self.fc2(h)
         symbol = self.symbol_head(h)
-        # Final clamp on outputs
-        class_logits = torch.clamp(class_logits, min=-100.0, max=100.0)
-        symbol = torch.clamp(symbol, min=-10.0, max=10.0)
         llr = class_logits.view(-1, self.n_modes, 4)
         # Map logits to LLR per bit (2 bits).  For QPSK Gray: bit0 distinguishes imag, bit1 real.
         bit0 = llr[..., 0] - llr[..., 1]
@@ -331,8 +321,6 @@ class OAMNeuralDemultiplexer(nn.Module):
             pilot_tokens = None
         tokens = self.attention(tokens, pilot_tokens)
         feat_att = tokens.transpose(1, 2).view(B, C, H, W)
-        # Clamp attention features to prevent extreme values
-        feat_att = torch.clamp(feat_att, min=-50.0, max=50.0)
         basis_mag = torch.abs(self.basis_fields.to(feat_att.device)) + 1e-6
         basis_low = F.interpolate(
             basis_mag.unsqueeze(1),

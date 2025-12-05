@@ -80,9 +80,10 @@ class DatasetConfig:
         return json.dumps(asdict(self), indent=2)
 
 
-def stride_downsample(field: np.ndarray, target_size: int) -> np.ndarray:
+def average_downsample(field: np.ndarray, target_size: int) -> np.ndarray:
     """
-    Downsample a complex field to target_size x target_size using stride pooling.
+    Downsample a complex field to target_size x target_size using average pooling.
+    This preserves phase information better than simple decimation.
     """
     if field.shape[0] % target_size != 0 or field.shape[1] % target_size != 0:
         raise ValueError(
@@ -139,7 +140,7 @@ def initialise_transmitter(cfg: DatasetConfig) -> encodingRunner:
     """Create the encoding runner with shared LDPC/pilot configuration."""
     with contextlib.redirect_stdout(io.StringIO()):
         runner = encodingRunner(
-            spatial_modes=list(cfg.spatial_modes),
+            spatial_modes=[tuple(m) for m in cfg.spatial_modes],
             wavelength=cfg.wavelength_m,
             w0=cfg.w0_m,
             fec_rate=cfg.fec_rate,
@@ -180,7 +181,7 @@ def generate_frame_samples(
         for mode, sig in tx_frame.tx_signals.items()
     }
     symbol_count = min(len(s) for s in symbols_per_mode.values())
-    mode_list = list(cfg.spatial_modes)
+    mode_list = [tuple(m) for m in cfg.spatial_modes]
     n_modes = len(mode_list)
 
     # Basis fields at transmitter plane (scaled)
@@ -231,6 +232,45 @@ def generate_frame_samples(
         grid_info["X"], grid_info["Y"], receiver_radius
     )
 
+    # --- Normalization Calculation ---
+    # Calculate expected power at receiver (P_rx) for a single mode with unit power
+    # We use the first mode as a reference.
+    # P_rx_expected = P_tx * eta_geo * amplitude_loss^2
+    # But here P_tx is split among modes.
+    # We want the INPUT to the CNN to be roughly O(1).
+    # The field E_rx has units of sqrt(W/m^2) * grid_scaling?
+    # Actually, let's look at how E is generated.
+    # E_basis has sum(|E|^2)*dA = 1 (before scaling).
+    # Then scaled by sqrt(P_tx / n_modes).
+    # So sum(|E_tx|^2)*dA = P_tx.
+    # E_rx = E_tx * amplitude_loss.
+    # Power_rx = P_tx * amplitude_loss^2 * eta_geo.
+    # We want to scale E_rx such that the average pixel magnitude is reasonable, or total power is 1.
+    # Let's normalize by the SQRT of the EXPECTED POWER of a SINGLE MODE.
+    # This ensures that fading is preserved relative to the "clear sky" baseline.
+    
+    # Reference power (single mode, clear sky, geometric loss included)
+    ref_power = (cfg.total_tx_power_w / n_modes) * eta_mean * (amplitude_loss**2)
+    # If ref_power is tiny (e.g. 1e-9), sqrt is 3e-5.
+    # We want to divide E_rx by sqrt(ref_power) * some_constant?
+    # Actually, let's normalize so that the total energy in the aperture (for a clear channel) would be 1.
+    normalization_scale = 1.0 / (np.sqrt(ref_power) + 1e-16)
+    
+    # We also need to account for the grid area dA because the CNN sees "pixels", not "W/m^2".
+    # But physically, E is field amplitude.
+    # Let's just scale E_rx so that sum(|E_rx|^2) over the aperture is approx 1 for a clear channel.
+    # E_rx_normalized = E_rx * normalization_scale
+    # Then sum(|E_norm|^2)*dA = sum(|E|^2)*dA * scale^2 = P_rx * (1/P_rx) = 1.
+    # Perfect.
+    
+    # However, we are downsampling.
+    # Average pooling preserves the "average field value".
+    # Power is quadratic.
+    # If we downsample 512x512 -> 128x128 (factor 4),
+    # The area of a "downsampled pixel" is effectively 16 * dA.
+    # Let's just apply the scalar normalization to the high-res field.
+
+
     fields_ds = []
     symbols_true = []
     metadata = {
@@ -263,8 +303,11 @@ def generate_frame_samples(
         )
         E_rx = result["final_field"] * amplitude_loss
         E_rx *= aperture_mask
+        
+        # Apply Normalization
+        E_rx_norm = E_rx * normalization_scale
 
-        field_ds = stride_downsample(E_rx, cfg.downsample_size)
+        field_ds = average_downsample(E_rx_norm, cfg.downsample_size)
         fields_ds.append(stack_real_imag(field_ds))
 
         symbol_stack = np.stack(
@@ -281,6 +324,7 @@ def generate_frame_samples(
         np.asarray(fields_ds, dtype=np.float32),
         np.asarray(symbols_true, dtype=np.float32),
         {k: np.asarray(v) for k, v in metadata.items()},
+        normalization_scale, # Return this so we can save it!
     )
 
 
@@ -290,11 +334,15 @@ def write_hdf5(
     fields_iter: Iterable[np.ndarray],
     symbols_iter: Iterable[np.ndarray],
     metadata_iter: Iterable[Dict[str, np.ndarray]],
+    normalization_scale: float,
 ) -> None:
     """Stream batches into an HDF5 file with extendable datasets."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with h5py.File(output_path, "w") as hf:
-        hf.attrs["config"] = config.to_json()
+        # Update config with normalization scale for reproducibility
+        cfg_dict = asdict(config)
+        cfg_dict["normalization_scale"] = normalization_scale
+        hf.attrs["config"] = json.dumps(cfg_dict, indent=2)
         hf.attrs["dataset_uuid"] = str(uuid.uuid4())
 
         X_ds = hf.create_dataset(
@@ -358,7 +406,7 @@ def generate_dataset(config: DatasetConfig, output_path: str) -> None:
         payload_seeds = range(config.payload_seeds_per_cn2)
         for turb_seed in turb_seeds:
             for payload_seed in payload_seeds:
-                fields, symbols, meta = generate_frame_samples(
+                fields, symbols, meta, norm_scale = generate_frame_samples(
                     config,
                     transmitter,
                     grid_info,
@@ -370,8 +418,9 @@ def generate_dataset(config: DatasetConfig, output_path: str) -> None:
                 fields_batches.append(fields)
                 symbols_batches.append(symbols)
                 metadata_batches.append(meta)
-
-    write_hdf5(output_path, config, fields_batches, symbols_batches, metadata_batches)
+                
+    # Use the last calculated normalization scale (should be constant for a fixed config)
+    write_hdf5(output_path, config, fields_batches, symbols_batches, metadata_batches, norm_scale)
 
 
 def parse_args() -> argparse.Namespace:

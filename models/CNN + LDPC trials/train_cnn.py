@@ -237,7 +237,12 @@ def train_epoch(
         pilot_mask = batch["pilot_mask"].to(device, non_blocking=True)
         class_index = batch["class_index"].to(device, non_blocking=True)
         target_symbols = batch["symbols"].to(device, non_blocking=True)
+        target_symbols = batch["symbols"].to(device, non_blocking=True)
         target_bits = batch["bits"].to(device, non_blocking=True)
+        
+        if batch_idx == 0:
+             # Log stats for first batch of epoch
+             print(f"    [Epoch Start] Field min/max: {field.min():.2e}/{field.max():.2e}")
 
         with autocast(
             device_type=autocast_device,
@@ -485,6 +490,18 @@ def main() -> None:
     if train_len <= 0:
         raise ValueError("Validation split too large; no samples left for training.")
     train_ds, val_ds = random_split(dataset, [train_len, val_len])
+    
+    # --- Sanity Check: Validate one batch ---
+    print("[info] Running sanity check on one batch...")
+    temp_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
+    batch = next(iter(temp_loader))
+    f_check = batch["field"]
+    print(f"    Input stats: min={f_check.min():.2e}, max={f_check.max():.2e}, mean={f_check.mean():.2e}, std={f_check.std():.2e}")
+    if torch.isnan(f_check).any() or torch.isinf(f_check).any():
+        raise ValueError("Sanity check failed: Input fields contain NaN/Inf!")
+    if f_check.abs().max() < 1e-6:
+        print("    [WARNING] Input fields are extremely small. Normalization might be missing!")
+    print("[info] Sanity check passed.")
 
     pin_memory = args.device.startswith("cuda")
     loader_kwargs = {

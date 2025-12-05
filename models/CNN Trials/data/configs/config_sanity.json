@@ -1,0 +1,106 @@
+{
+    "dataset_name": "fso_oam_sanity",
+    "description": "Sanity check dataset: Zero turbulence, Pilot enabled",
+    "system_parameters": {
+        "wavelength": 1.55e-6,
+        "w0": 0.025,
+        "distance": 1000,
+        "receiver_diameter": 0.5,
+        "p_tx_total": 1.0,
+        "spatial_modes": [
+            [
+                0,
+                -1
+            ],
+            [
+                0,
+                1
+            ],
+            [
+                0,
+                -3
+            ],
+            [
+                0,
+                3
+            ],
+            [
+                0,
+                -4
+            ],
+            [
+                0,
+                4
+            ],
+            [
+                1,
+                -1
+            ],
+            [
+                1,
+                1
+            ]
+        ],
+        "pilot_parameters": {
+            "enabled": true,
+            "mode": [
+                0,
+                0
+            ],
+            "power_ratio": 0.2
+        }
+    },
+    "turbulence_parameters": {
+        "cn2_min": 1e-25,
+        "cn2_max": 1e-25,
+        "num_cn2_points": 1,
+        "cn2_distribution": "linear",
+        "L0": 10.0,
+        "l0_inner": 0.005,
+        "num_screens": 1,
+        "cn2_model": "uniform"
+    },
+    "dataset_size": {
+        "train": 5000,
+        "val": 1000,
+        "test": 1000,
+        "samples_per_cn2": "auto"
+    },
+    "grid_parameters": {
+        "n_grid_sim": 512,
+        "n_grid_output": 128,
+        "oversampling": 2,
+        "downsampling_method": "bilinear"
+    },
+    "data_format": {
+        "input_type": "intensity",
+        "input_channels": 1,
+        "input_shape": [
+            128,
+            128
+        ],
+        "output_type": "symbols",
+        "output_shape": [
+            8,
+            2
+        ],
+        "normalize_input": false,
+        "normalization_method": "per_sample"
+    },
+    "augmentation": {
+        "enabled": true,
+        "rotation_range": 0,
+        "translation_range": 0,
+        "multiple_realizations": 1,
+        "add_noise": true
+    },
+    "output": {
+        "format": "hdf5",
+        "compression": "gzip",
+        "compression_level": 4,
+        "save_metadata": true,
+        "save_turbulence_params": true
+    },
+    "random_seed": 42,
+    "verbose": true
+}

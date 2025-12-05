@@ -1,0 +1,249 @@
+{
+  "cn2_values": [
+    1e-18,
+    1.637893706954068e-18,
+    2.6826957952797163e-18,
+    4.393970560760786e-18,
+    7.19685673001153e-18,
+    1.1787686347935915e-17,
+    1.9306977288832457e-17,
+    3.1622776601683796e-17,
+    5.179474679231223e-17,
+    8.483428982440692e-17,
+    1.389495494373136e-16,
+    2.275845926074791e-16,
+    3.727593720314938e-16,
+    6.105402296585314e-16,
+    1e-15
+  ],
+  "equalizers": [
+    "mmse"
+  ],
+  "data": {
+    "mmse": [
+      {
+        "cn2": 1e-18,
+        "equalizer": "mmse",
+        "ber": 0.0,
+        "coded_ber": 0.0,
+        "h_est_condition": 1.0201007970382172,
+        "noise_var_est": 0.0,
+        "bit_errors": 0,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 1.637893706954068e-18,
+        "equalizer": "mmse",
+        "ber": 0.0,
+        "coded_ber": 0.0,
+        "h_est_condition": 1.0260990971177113,
+        "noise_var_est": 0.0,
+        "bit_errors": 0,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 2.6826957952797163e-18,
+        "equalizer": "mmse",
+        "ber": 0.0,
+        "coded_ber": 0.0,
+        "h_est_condition": 1.0341150750692822,
+        "noise_var_est": 0.0,
+        "bit_errors": 0,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 4.393970560760786e-18,
+        "equalizer": "mmse",
+        "ber": 0.0,
+        "coded_ber": 0.0,
+        "h_est_condition": 1.045040873518949,
+        "noise_var_est": 0.0,
+        "bit_errors": 0,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 7.19685673001153e-18,
+        "equalizer": "mmse",
+        "ber": 0.0010683760683760685,
+        "coded_ber": 0.0013427734375,
+        "h_est_condition": 1.0603469180540508,
+        "noise_var_est": 0.0,
+        "bit_errors": 7,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 1.1787686347935915e-17,
+        "equalizer": "mmse",
+        "ber": 0.012362637362637362,
+        "coded_ber": 0.0125732421875,
+        "h_est_condition": 1.0825772902307274,
+        "noise_var_est": 0.0,
+        "bit_errors": 81,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 1.9306977288832457e-17,
+        "equalizer": "mmse",
+        "ber": 0.04242979242979243,
+        "coded_ber": 0.0404052734375,
+        "h_est_condition": 1.1163409625456946,
+        "noise_var_est": 0.0,
+        "bit_errors": 278,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 3.1622776601683796e-17,
+        "equalizer": "mmse",
+        "ber": 0.08943833943833944,
+        "coded_ber": 0.083984375,
+        "h_est_condition": 1.1704570658964089,
+        "noise_var_est": 0.0,
+        "bit_errors": 586,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 5.179474679231223e-17,
+        "equalizer": "mmse",
+        "ber": 0.1452991452991453,
+        "coded_ber": 0.1390380859375,
+        "h_est_condition": 1.2630500758086936,
+        "noise_var_est": 0.0,
+        "bit_errors": 952,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 8.483428982440692e-17,
+        "equalizer": "mmse",
+        "ber": 0.21031746031746032,
+        "coded_ber": 0.2054443359375,
+        "h_est_condition": 1.434081927149018,
+        "noise_var_est": 0.0,
+        "bit_errors": 1378,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 1.389495494373136e-16,
+        "equalizer": "mmse",
+        "ber": 0.28922466422466425,
+        "coded_ber": 0.28466796875,
+        "h_est_condition": 1.7795267586411854,
+        "noise_var_est": 0.0,
+        "bit_errors": 1895,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 2.275845926074791e-16,
+        "equalizer": "mmse",
+        "ber": 0.38644688644688646,
+        "coded_ber": 0.3800048828125,
+        "h_est_condition": 2.6248215705211337,
+        "noise_var_est": 0.0,
+        "bit_errors": 2532,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 3.727593720314938e-16,
+        "equalizer": "mmse",
+        "ber": 0.4574175824175824,
+        "coded_ber": 0.4539794921875,
+        "h_est_condition": 14.013634205841326,
+        "noise_var_est": 0.0,
+        "bit_errors": 2997,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 6.105402296585314e-16,
+        "equalizer": "mmse",
+        "ber": 0.4987789987789988,
+        "coded_ber": 0.4986572265625,
+        "h_est_condition": 99.24391722558993,
+        "noise_var_est": 0.0,
+        "bit_errors": 3268,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      },
+      {
+        "cn2": 1e-15,
+        "equalizer": "mmse",
+        "ber": 0.49603174603174605,
+        "coded_ber": 0.4991455078125,
+        "h_est_condition": 29.142989145308533,
+        "noise_var_est": 0.0,
+        "bit_errors": 3250,
+        "total_bits": 6552,
+        "success": true,
+        "error": null
+      }
+    ]
+  },
+  "config": {
+    "cn2_min": 1e-18,
+    "cn2_max": 1e-15,
+    "num_points": 15,
+    "distance": 1000,
+    "wavelength": 1.55e-06,
+    "spatial_modes": [
+      [
+        0,
+        -1
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        -3
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        0,
+        -4
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        1,
+        -1
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "n_modes": 8
+  },
+  "timestamp": "2025-11-22 03:03:47"
+}

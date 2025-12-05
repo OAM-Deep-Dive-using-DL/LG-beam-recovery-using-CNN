@@ -1,0 +1,201 @@
+import torch
+from torch.utils.data import DataLoader
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from tqdm import tqdm
+import argparse
+
+from model import MultiHeadResNet
+from train import FSODataset
+
+def qpsk_demod(symbols_complex):
+    """
+    Demodulate complex symbols to bits (QPSK).
+    Constellation: (1+j, -1+j, -1-j, 1-j) / sqrt(2)
+    Bits: 00, 01, 11, 10 (Gray coding) or just quadrant mapping.
+    
+    Let's use simple quadrant mapping:
+    Re > 0, Im > 0 -> 00
+    Re < 0, Im > 0 -> 01
+    Re < 0, Im < 0 -> 11
+    Re > 0, Im < 0 -> 10
+    """
+    # Simply check signs
+    bits_re = (np.real(symbols_complex) < 0).astype(int)
+    bits_im = (np.imag(symbols_complex) < 0).astype(int)
+    return bits_re, bits_im
+
+def evaluate(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Load Data
+    test_dataset = FSODataset(args.data_dir / f"{args.dataset_name}_test.h5", 'test')
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    
+    # Load Model
+    model = MultiHeadResNet(n_modes=test_dataset.n_modes).to(device)
+    model.load_state_dict(torch.load("best_model.pth", map_location=device))
+    model.eval()
+    
+    all_preds = []
+    all_targets = []
+    
+    print("Running evaluation...")
+    with torch.no_grad():
+        for imgs, syms, pwrs in tqdm(test_loader):
+            imgs = imgs.to(device)
+            
+            # Predict
+            pred_syms, pred_pwrs = model(imgs)
+            
+            # Move to CPU
+            all_preds.append(pred_syms.cpu().numpy())
+            all_targets.append(syms.numpy())
+            
+    all_preds = np.concatenate(all_preds, axis=0)   # [N, 8, 2]
+    all_targets = np.concatenate(all_targets, axis=0) # [N, 8, 2]
+    
+    # Convert to complex
+    preds_complex = all_preds[..., 0] + 1j * all_preds[..., 1]
+    targets_complex = all_targets[..., 0] + 1j * all_targets[..., 1]
+    
+    # 1. Symbol Error Rate (SER)
+    # Hard decision
+    # QPSK: 4 quadrants. If predicted quadrant != target quadrant => Error
+    
+    # Target quadrants
+    t_re_sign = np.sign(np.real(targets_complex))
+    t_im_sign = np.sign(np.imag(targets_complex))
+    
+    # Pred quadrants
+    p_re_sign = np.sign(np.real(preds_complex))
+    p_im_sign = np.sign(np.imag(preds_complex))
+    
+    # Errors
+    errors = (t_re_sign != p_re_sign) | (t_im_sign != p_im_sign)
+    ser = np.mean(errors)
+    
+    # 2. Bit Error Rate (BER)
+    # Each symbol is 2 bits.
+    bit_errors = (t_re_sign != p_re_sign).astype(int) + (t_im_sign != p_im_sign).astype(int)
+    total_bits = all_targets.size * 2
+    ber = np.sum(bit_errors) / total_bits
+    
+    print(f"\n{'='*40}")
+    print(f"Results on TEST set ({len(test_dataset)} samples)")
+    print(f"{'='*40}")
+    print(f"Overall SER: {ser:.4f}")
+    print(f"Overall BER: {ber:.4f}")
+
+    # 3. Breakdown by Cn2
+    # We need to get cn2 values corresponding to the test set order
+    # Since DataLoader with shuffle=False preserves order, we can just use test_dataset.cn2
+    # But wait, if batch_size doesn't divide perfectly, or if we used shuffle (we didn't), 
+    # it's safer to collect them in the loop or just access directly if we are sure.
+    # We used shuffle=False.
+    
+    all_cn2 = test_dataset.cn2
+    unique_cn2 = np.unique(all_cn2)
+    
+    print(f"\nBreakdown by Turbulence Strength (Cn2):")
+    print(f"{'Cn2':<12} | {'BER':<8} | {'SER':<8} | {'Samples':<8}")
+    print("-" * 46)
+    
+    ber_per_cn2 = []
+    
+    for val in unique_cn2:
+        mask = (all_cn2 == val)
+        
+        # Filter errors for this Cn2
+        # bit_errors is [N, 8] (sum of re+im errors per symbol) -> No, it's [N, 8] ints (0, 1, or 2)
+        # Wait, bit_errors calculation above:
+        # bit_errors = (t_re_sign != p_re_sign).astype(int) + (t_im_sign != p_im_sign).astype(int)
+        # Shape is [N, 8]
+        
+        subset_bit_errors = bit_errors[mask]
+        subset_total_bits = subset_bit_errors.size * 2 # 2 bits per symbol
+        # Wait, subset_bit_errors elements are 0, 1, or 2.
+        # So sum(subset_bit_errors) is total bit errors.
+        # Total bits is number of symbols * 2.
+        
+        subset_ber = np.sum(subset_bit_errors) / (subset_bit_errors.size * 2)
+        
+        # SER
+        # errors is [N, 8] boolean
+        subset_errors = errors[mask]
+        subset_ser = np.mean(subset_errors)
+        
+        count = np.sum(mask)
+        
+        print(f"{val:.2e}     | {subset_ber:.4f}   | {subset_ser:.4f}   | {count:<8}")
+        ber_per_cn2.append(subset_ber)
+
+    # 4. Diagnosis Statistics
+    print(f"\n{'='*40}")
+    print(f"Diagnosis Statistics")
+    print(f"{'='*40}")
+    
+    # Magnitude Check
+    mean_mag_pred = np.mean(np.abs(preds_complex))
+    mean_mag_true = np.mean(np.abs(targets_complex))
+    print(f"Mean Magnitude (Pred): {mean_mag_pred:.4f} (Target: {mean_mag_true:.4f})")
+    
+    # Phase Check
+    # Calculate phase difference: pred * conj(target)
+    # If pred = target * exp(j*theta), then product is |target|^2 * exp(j*theta)
+    phase_diff = np.angle(preds_complex * np.conj(targets_complex))
+    mean_phase_bias = np.degrees(np.mean(phase_diff))
+    phase_jitter = np.degrees(np.std(phase_diff))
+    
+    print(f"Mean Phase Bias:     {mean_phase_bias:.2f} degrees")
+    print(f"Phase Jitter (Std):  {phase_jitter:.2f} degrees")
+    
+    if mean_mag_pred < 0.1:
+        print(">> DIAGNOSIS: Model is outputting ZEROS (Confusion/Collapse).")
+    elif abs(mean_phase_bias) > 10 and phase_jitter < 45:
+        print(">> DIAGNOSIS: Systematic PHASE ROTATION. (Pilot ambiguity?)")
+    elif phase_jitter > 60:
+        print(">> DIAGNOSIS: Random Guessing / High Noise.")
+    else:
+        print(">> DIAGNOSIS: Mixed/Unknown errors.")
+
+    # 5. Plot BER vs Cn2
+    plt.figure(figsize=(10, 6))
+    plt.semilogx(unique_cn2, ber_per_cn2, 'o-', linewidth=2)
+    plt.grid(True, which="both", ls="-", alpha=0.4)
+    plt.xlabel('Turbulence Strength ($C_n^2$)')
+    plt.ylabel('Bit Error Rate (BER)')
+    plt.title('BER vs. Turbulence Strength')
+    plt.axhline(0, color='black', linewidth=0.5)
+    plt.ylim(bottom=0)
+    plt.savefig("evaluation_ber_curve.png")
+    print("\nSaved 'evaluation_ber_curve.png'")
+    
+    # 5. Constellation Plot (Subset)
+    plt.figure(figsize=(8, 8))
+    # Plot a subset of points to avoid clutter
+    subset = 2000
+    flat_preds = preds_complex.flatten()[:subset]
+    flat_targets = targets_complex.flatten()[:subset]
+    
+    plt.scatter(np.real(flat_targets), np.imag(flat_targets), c='red', marker='x', label='True', alpha=0.5)
+    plt.scatter(np.real(flat_preds), np.imag(flat_preds), c='blue', marker='.', label='Pred', alpha=0.3)
+    
+    plt.axhline(0, color='black', linewidth=0.5)
+    plt.axvline(0, color='black', linewidth=0.5)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.title(f"Recovered Constellation (Overall BER={ber:.4f})")
+    plt.savefig("evaluation_constellation.png")
+    print("Saved 'evaluation_constellation.png'")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=Path, default=Path('dataset'))
+    parser.add_argument('--dataset_name', type=str, default='fso_oam_turbulence_v1')
+    parser.add_argument('--batch_size', type=int, default=32)
+    args = parser.parse_args()
+    
+    evaluate(args)

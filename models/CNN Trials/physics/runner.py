@@ -16,6 +16,40 @@ import io
 import argparse
 warnings.filterwarnings('ignore')
 
+def text_to_bits(text: str) -> np.ndarray:
+    """
+    Convert a UTF-8 string into a numpy array of bits (uint8 {0,1}).
+    """
+    if not text:
+        return np.zeros(0, dtype=np.uint8)
+    byte_array = np.frombuffer(text.encode('utf-8'), dtype=np.uint8)
+    return np.unpackbits(byte_array)
+
+
+def bits_to_text(bits: np.ndarray, bit_length: int) -> str:
+    """
+    Reconstruct a UTF-8 string from a numpy array of bits.
+    Only the first `bit_length` bits are considered (remaining bits ignored).
+    """
+    bit_length = int(bit_length)
+    if bit_length <= 0:
+        return ""
+    bits = np.asarray(bits, dtype=np.uint8)
+    if bits.ndim != 1:
+        bits = bits.ravel()
+    trimmed = bits[:bit_length]
+    if bit_length % 8 != 0:
+        pad = 8 - (bit_length % 8)
+        trimmed = np.concatenate([trimmed, np.zeros(pad, dtype=np.uint8)])
+    byte_len = (bit_length + 7) // 8
+    byte_array = np.packbits(trimmed)[:byte_len]
+    try:
+        return byte_array.tobytes().decode('utf-8')
+    except UnicodeDecodeError:
+        # Fallback: ignore invalid trailing bytes
+        return byte_array.tobytes().decode('utf-8', errors='ignore')
+
+
 # Import all modules
 try:
     from lgBeam import LaguerreGaussianBeam
@@ -26,10 +60,9 @@ try:
                             create_multi_layer_screens,
                             apply_multi_layer_turbulence)
     from receiver import FSORx
-    from neural_receiver import NeuralFSORx
 except ImportError as e:
     print(f"✗ E2E Simulation Import Error: {e}")
-    print("  Please ensure lgBeam.py, encoding.py, fsplAtmAttenuation.py, turbulence.py, receiver.py, and neural_receiver.py are in the same directory.")
+    print("  Please ensure lgBeam.py, encoding.py, fsplAtmAttenuation.py, turbulence.py, and receiver.py are in the same directory.")
     sys.exit(1)
 
 np.random.seed(42)
@@ -47,48 +80,46 @@ class SimulationConfig:
     W0 = 25e-3           # [m]
     
     # --- Link Parameters ---
-    DISTANCE = 800      # [m]
-    RECEIVER_DIAMETER = 0.3  # [m]
+    DISTANCE = 1000      # [m] - Updated to match pipeline.py
+    RECEIVER_DIAMETER = 0.5  # [m] - Fixed: was 0.3m, increased to reduce geometric loss for high-order modes
     P_TX_TOTAL_W = 1.0     # [W] – now used for scaling
     
     # --- Spatial Modes ---
     SPATIAL_MODES = [
     (0, -1), (0, 1), (0, -3), (0, 3), (0, -4), (0, 4), (1, -1), (1, 1)]
     
-    # --- Turbulence Parameters (TRUE IDEAL) ---
-    CN2 = 1e-18           # [m^(-2/3)] 
+    # --- Turbulence Parameters ---
+    CN2 = 1e-17           # [m^(-2/3)] - Updated to match pipeline.py
     L0 = 10.0           # [m]
     L0_INNER = 0.005    # [m]
-    NUM_SCREENS = 10   
+    NUM_SCREENS = 15    # Updated to match pipeline.py
     CN2_MODEL = "uniform"  # Horizontal path → uniform profile; set "hufnagel_valley" for vertical links
     
     # --- Weather Condition ---
     WEATHER = 'clear'    
     
-    # --- Communication Parameters (TRUE IDEAL) ---
-    FEC_RATE = 0.8      
-    PILOT_RATIO = 0.1   
+    # --- Communication Parameters ---
+    FEC_RATE = 0.8      # Updated to match pipeline.py
+    PILOT_RATIO = 0.1   # Updated to match pipeline.py
     
     # FIXED: Multiple of total k_ldpc = FEC_RATE * 1024 * n_modes
-    N_INFO_BITS = 819 * 8  # 4914 bits (k=819 per codeword, 6 modes equiv)
+    N_INFO_BITS = 819 * 8  # Placeholder; updated dynamically once LDPC is built
+    LDPC_BLOCKS = 4       # Number of LDPC codewords per frame
+    MESSAGE = "SRIVATSA"
     
     # --- Simulation Grid ---
     N_GRID = 512        # 512x512 is fast for a sanity check
     OVERSAMPLING = 2    
     
-    # --- Receiver Configuration (TRUE IDEAL) ---
-    EQ_METHOD = 'auto'  # Auto-select MMSE when H is small (more robust than ZF)
+    # --- Receiver Configuration ---
+    EQ_METHOD = 'mmse'  # Updated to match pipeline.py (use MMSE by default)
     ADD_NOISE = False   # Disable additive noise
-    SNR_DB = 50        # Set to a high dummy value
+    SNR_DB = 35         # Updated to match pipeline.py
     
     # --- Output ---
     PLOT_DIR = os.path.join(SCRIPT_DIR, "e2e_results_ideal") # New folder
-    DPI = 600  # IEEE compliance (600 DPI for figures)
+    DPI = 1200  # Updated to match pipeline.py
     ENABLE_POWER_PROBE = True  # Toggle numerical power probe diagnostic
-    
-    # --- Neural Receiver ---
-    USE_NEURAL_RX = False
-    CHECKPOINT_PATH = "checkpoints/best_model.pt"
 
 # ============================================================================
 # NEW E2E SIMULATION (RECTIFIED)
@@ -169,39 +200,44 @@ def run_e2e_simulation(config):
 
     # 1e. Initialize Receiver
     print("[5] Initializing Receiver...")
-    if cfg.USE_NEURAL_RX:
-        print(f"    Using NEURAL RECEIVER (Checkpoint: {cfg.CHECKPOINT_PATH})")
-        try:
-            receiver = NeuralFSORx(
-                checkpoint_path=cfg.CHECKPOINT_PATH,
-                ldpc=transmitter.ldpc  # Share LDPC instance
-            )
-        except Exception as e:
-            print(f"✗ Failed to load Neural Receiver: {e}")
-            print("  Falling back to Classical Receiver...")
-            cfg.USE_NEURAL_RX = False
-            
-    if not cfg.USE_NEURAL_RX:
-        print(f"    Using CLASSICAL RECEIVER (Equalizer: {cfg.EQ_METHOD.upper()})")
-        receiver = FSORx(
-            spatial_modes=cfg.SPATIAL_MODES,
-            wavelength=cfg.WAVELENGTH,
-            w0=cfg.W0,
-            z_distance=cfg.DISTANCE,
-            pilot_handler=transmitter.pilot_handler,  # Share pilot handler!
-            eq_method=cfg.EQ_METHOD,
-            receiver_radius=(cfg.RECEIVER_DIAMETER / 2.0),
-            ldpc_instance=transmitter.ldpc  # CRITICAL: Share LDPC instance to ensure same H matrix!
-        )
+    receiver = FSORx(
+        spatial_modes=cfg.SPATIAL_MODES,
+        wavelength=cfg.WAVELENGTH,
+        w0=cfg.W0,
+        z_distance=cfg.DISTANCE,
+        pilot_handler=transmitter.pilot_handler,  # Share pilot handler!
+        eq_method=cfg.EQ_METHOD,
+        receiver_radius=(cfg.RECEIVER_DIAMETER / 2.0),
+        ldpc_instance=transmitter.ldpc  # CRITICAL: Share LDPC instance to ensure same H matrix!
+    )
+    ldpc_k = transmitter.ldpc.k
+    ldpc_n = transmitter.ldpc.n
+    num_ldpc_blocks = int(getattr(cfg, "LDPC_BLOCKS", 4))
+    if num_ldpc_blocks <= 0:
+        num_ldpc_blocks = 1
+    n_info_bits = ldpc_k * num_ldpc_blocks
+    if getattr(cfg, "N_INFO_BITS", None) != n_info_bits:
+        cfg.N_INFO_BITS = n_info_bits
+    print(f"    LDPC block dims: k={ldpc_k}, n={ldpc_n}, blocks/frame={num_ldpc_blocks}, total info bits={n_info_bits}")
 
     # === 2. TRANSMITTER ===
     print("\n" + "="*80)
     print("STAGE 1: TRANSMITTER")
     print("="*80)
     
-    # Generate original data bits
-    data_bits = np.random.randint(0, 2, cfg.N_INFO_BITS)
-    print(f"Generated {len(data_bits)} info bits.")
+    # Generate original data bits (embed deterministic message, pad with random tail)
+    message_text = getattr(cfg, "MESSAGE", "")
+    message_bits = text_to_bits(message_text)
+    message_bit_len = len(message_bits)
+    if message_bit_len > n_info_bits:
+        raise ValueError(
+            f"Message '{message_text}' requires {message_bit_len} bits, "
+            f"but available info capacity is only {n_info_bits} bits."
+        )
+    data_bits = np.random.randint(0, 2, n_info_bits)
+    if message_bit_len > 0:
+        data_bits[:message_bit_len] = message_bits
+    print(f"Generated {len(data_bits)} info bits (message '{message_text}' occupies {message_bit_len} bits).")
     
     # Generate the full frame of symbols
     tx_frame = transmitter.transmit(data_bits, verbose=True)
@@ -214,6 +250,10 @@ def run_e2e_simulation(config):
         tx_frame.metadata = {}
     tx_frame.metadata['basis_scaling_factors'] = basis_scaling_factors
     tx_frame.metadata['basis_energy'] = basis_energy
+    tx_frame.metadata['message_text'] = message_text
+    tx_frame.metadata['message_bit_length'] = message_bit_len
+    # CRITICAL FIX: Store noise flag for receiver (Fix 1: Noise Variance)
+    tx_frame.metadata['noise_disabled'] = not cfg.ADD_NOISE
     # Store attenuation factor (will be set after calculation, see below)
     
     # Get total number of symbols. Find the *minimum* length across all modes.
@@ -425,6 +465,9 @@ def run_e2e_simulation(config):
         original_data_bits=data_bits,  # INFO bits (before LDPC encoding) for BER calculation
         verbose=True
     )
+    decoded_message = bits_to_text(recovered_bits, message_bit_len)
+    print(f"\nRecovered message (first {message_bit_len} bits): '{decoded_message}'")
+    print(f"Original message: '{message_text}'")
 
     # === 5. RESULTS ===
     print("\n" + "="*80)
@@ -439,6 +482,9 @@ def run_e2e_simulation(config):
     print(f"    BIT ERRORS:      {metrics['bit_errors']}")
     print(f"    FINAL BER:       {metrics['ber']:.4e}")
     print("="*80)
+    print(f"    MESSAGE TX: '{message_text}'")
+    print(f"    MESSAGE RX: '{decoded_message}'")
+    print("="*80)
     
     # Store results for plotting
     results = {
@@ -448,7 +494,12 @@ def run_e2e_simulation(config):
         'tx_signals': tx_signals,
         'E_tx_visualization': E_tx_visualization,
         'E_rx_visualization': E_rx_visualization,
-        'H_est': metrics.get('H_est', np.zeros((n_modes, n_modes))) # Neural RX might not return H_est
+        'H_est': metrics['H_est'],
+        'message': {
+            'original': message_text,
+            'decoded': decoded_message,
+            'bit_length': message_bit_len
+        }
     }
     
     return results
@@ -649,27 +700,7 @@ if __name__ == "__main__":
         action="store_true",
         help="When sweeping Cn², save plots for each operating point."
     )
-    parser.add_argument(
-        "--save-sweep-plots",
-        action="store_true",
-        help="When sweeping Cn², save plots for each operating point."
-    )
-    parser.add_argument(
-        "--use-neural-rx",
-        action="store_true",
-        help="Enable the Neural Receiver (CNN) instead of classical DSP."
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default="checkpoints/best_model.pt",
-        help="Path to the trained CNN checkpoint (default: checkpoints/best_model.pt)"
-    )
     args = parser.parse_args()
-    
-    # Update global config defaults based on args
-    SimulationConfig.USE_NEURAL_RX = args.use_neural_rx
-    SimulationConfig.CHECKPOINT_PATH = args.checkpoint
 
     if args.cn2_sweep:
         cn2_values = args.cn2_sweep
