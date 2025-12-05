@@ -126,6 +126,8 @@ models/CNN + LDPC trials
 *.md5
 
 
+
+datasets/
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -150,14 +152,7 @@ dmypy.json
 *.hdf5
 
 # Generated plots and results
-plots/
-pipeline_results/
-e2e_results_ideal/
-*.png
-*.jpg
-*.jpeg
-*.pdf
-*.svg
+
 
 # Logs and temporary files
 *.log
