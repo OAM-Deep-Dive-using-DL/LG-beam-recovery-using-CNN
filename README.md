@@ -75,7 +75,9 @@ Light can carry two types of angular momentum:
 An OAM beam has a helical phase front described by $\exp(i l \phi)$, where $l$ is an integer (the **topological charge** or **azimuthal mode number**).
 
 *   **Orthogonality**: Modes with different $l$ are orthogonal in the sense that:
-    $$ \langle \Psi_{l_1} | \Psi_{l_2} \rangle = \delta_{l_1, l_2} $$
+    
+    $$\langle \Psi_{l_1} | \Psi_{l_2} \rangle = \delta_{l_1, l_2}$$
+    
     This orthogonality is the foundation of OAM multiplexing.
 
 *   **Multiplexing**: This allows us to transmit multiple independent data streams on the same wavelength, occupying the same space, differentiated only by their "twist" or helical phase structure.
@@ -86,7 +88,7 @@ An OAM beam has a helical phase front described by $\exp(i l \phi)$, where $l$ i
 
 In our simulation, we use **Laguerre-Gaussian (LG)** modes, which are exact solutions to the paraxial wave equation in cylindrical coordinates. The complex electric field amplitude $u_{p,l}(r, \phi, z)$ is given by:
 
-$$ u_{p,l}(r, \phi, z) = C_{p,l} \frac{1}{w(z)} \left(\frac{r\sqrt{2}}{w(z)}\right)^{|l|} L_p^{|l|}\left(\frac{2r^2}{w^2(z)}\right) \exp\left(\frac{-r^2}{w^2(z)}\right) \exp\left(-i l \phi\right) \exp\left(-i\psi(z)\right) $$
+$$u_{p,l}(r, \phi, z) = C_{p,l} \frac{1}{w(z)} \left(\frac{r\sqrt{2}}{w(z)}\right)^{|l|} L_p^{|l|}\left(\frac{2r^2}{w^2(z)}\right) \exp\left(\frac{-r^2}{w^2(z)}\right) \exp\left(-i l \phi\right) \exp\left(-i\psi(z)\right)$$
 
 Where:
 *   $p$ = radial index (number of radial nodes)
@@ -125,7 +127,9 @@ The radial profile shows how energy is distributed across the beam cross-section
 **Longitudinal Propagation**
 
 As the beam propagates, it diffracts and expands. The beam waist evolves as:
-$$ w(z) = w_0 \sqrt{1 + \left(\frac{z}{z_R}\right)^2} $$
+
+$$w(z) = w_0 \sqrt{1 + \left(\frac{z}{z_R}\right)^2}$$
+
 where $z_R = \pi w_0^2 / \lambda$ is the Rayleigh range.
 
 ![Longitudinal Propagation](models/LDPC%20+%20Pilot%20+%20MMSE%20trials/plots%20-%20LDPC%20+%20Pilot%20+%20MMSE%20trials/lgBeam_p0_l1/longitudinal_propagation.png)
@@ -186,7 +190,7 @@ We use the **DVB-S2 standard LDPC codes**. These are powerful error-correcting c
 
 Bits are mapped to complex symbols using **Quadrature Phase Shift Keying (QPSK)**:
 
-$$ s \in \left\\{\frac{1+j}{\sqrt{2}}, \frac{1-j}{\sqrt{2}}, \frac{-1+j}{\sqrt{2}}, \frac{-1-j}{\sqrt{2}}\right\\} $$
+$$s \in \left\\{\frac{1+j}{\sqrt{2}}, \frac{1-j}{\sqrt{2}}, \frac{-1+j}{\sqrt{2}}, \frac{-1-j}{\sqrt{2}}\right\\}$$
 
 Each symbol carries 2 bits of information. The normalization by $\sqrt{2}$ ensures unit average power.
 
@@ -208,7 +212,7 @@ To estimate the channel matrix $\mathbf{H}$ at the receiver, we insert known "pi
 
 The transmitted optical field is a coherent superposition of $N$ active OAM modes:
 
-$$ E_{tx}(r, \phi, z=0) = \sum_{n=1}^{N} s_n \cdot \Psi_{l_n}(r, \phi, 0) $$
+$$E_{tx}(r, \phi, z=0) = \sum_{n=1}^{N} s_n \cdot \Psi_{l_n}(r, \phi, 0)$$
 
 where $s_n$ are the QPSK symbols and $\Psi_{l_n}$ are the LG mode basis functions.
 
@@ -231,18 +235,18 @@ For each step:
 1.  **Diffraction (Vacuum Propagation)**:
     The beam propagates through a vacuum segment of length $\Delta z$. This is computed in the **frequency domain** using the **Angular Spectrum Method**:
     
-    $$ \tilde{E}(k_x, k_y, z+\Delta z) = \tilde{E}(k_x, k_y, z) \cdot \exp\left(i \Delta z \sqrt{k^2 - k_x^2 - k_y^2}\right) $$
+    $$\tilde{E}(k_x, k_y, z+\Delta z) = \tilde{E}(k_x, k_y, z) \cdot \exp\left(i \Delta z \sqrt{k^2 - k_x^2 - k_y^2}\right)$$
     
     where $\tilde{E}$ is the 2D Fourier transform of the field.
 
 2.  **Phase Screen (Turbulence)**:
     A random phase mask $\theta(x,y)$ is applied to simulate a thin slab of turbulent air:
     
-    $$ E(x,y,z^+) = E(x,y,z^-) \cdot \exp(i \theta(x,y)) $$
+    $$E(x,y,z^+) = E(x,y,z^-) \cdot \exp(i \theta(x,y))$$
     
     The phase screen is generated using the **Von Karman power spectral density**:
     
-    $$ \Phi_n(\kappa) = 0.033 C_n^2 \left(\kappa^2 + \kappa_0^2\right)^{-11/6} \exp\left(-\kappa^2/\kappa_m^2\right) $$
+    $$\Phi_n(\kappa) = 0.033 C_n^2 \left(\kappa^2 + \kappa_0^2\right)^{-11/6} \exp\left(-\kappa^2/\kappa_m^2\right)$$
     
     where:
     *   $\kappa$ = spatial frequency
@@ -259,7 +263,7 @@ After propagation, we apply:
 *   **Geometric Loss**: Beam divergence causes power to spill outside the receiver aperture
 *   **Additive Noise**: Complex Gaussian noise representing detector thermal noise and background light
 
-$$ E_{rx} = E_{propagated} \cdot \sqrt{L_{atm} \cdot L_{geo}} + n(x,y) $$
+$$E_{rx} = E_{propagated} \cdot \sqrt{L_{atm} \cdot L_{geo}} + n(x,y)$$
 
 where $n \sim \mathcal{CN}(0, \sigma^2)$.
 
@@ -269,15 +273,15 @@ where $n \sim \mathcal{CN}(0, \sigma^2)$.
 
 The receiver projects the incoming distorted field onto the ideal conjugate modes:
 
-$$ y_m = \iint E_{rx}(r, \phi) \cdot \Psi_m^*(r, \phi) \, r \, dr \, d\phi $$
+$$y_m = \iint E_{rx}(r, \phi) \cdot \Psi_m^*(r, \phi) \, r \, dr \, d\phi$$
 
 In the absence of turbulence, this would perfectly recover $s_m$ due to orthogonality. However, turbulence introduces crosstalk:
 
-$$ \mathbf{y} = \mathbf{H}\mathbf{s} + \mathbf{n} $$
+$$\mathbf{y} = \mathbf{H}\mathbf{s} + \mathbf{n}$$
 
 where $\mathbf{H}$ is the $N \times N$ channel matrix with elements:
 
-$$ H_{mn} = \iint \Psi_m^*(r,\phi) \cdot T(r,\phi) \cdot \Psi_n(r,\phi) \, r \, dr \, d\phi $$
+$$H_{mn} = \iint \Psi_m^*(r,\phi) \cdot T(r,\phi) \cdot \Psi_n(r,\phi) \, r \, dr \, d\phi$$
 
 and $T(r,\phi)$ represents the cumulative turbulence transfer function.
 
@@ -285,11 +289,11 @@ and $T(r,\phi)$ represents the cumulative turbulence transfer function.
 
 Using the received pilots $\mathbf{Y}_p$ (known positions) and transmitted pilots $\mathbf{X}_p$, we estimate $\mathbf{H}$:
 
-$$ \mathbf{Y}_p = \mathbf{H} \mathbf{X}_p + \mathbf{N}_p $$
+$$\mathbf{Y}_p = \mathbf{H} \mathbf{X}_p + \mathbf{N}_p$$
 
 The Least Squares estimate is:
 
-$$ \hat{\mathbf{H}} = \mathbf{Y}_p \mathbf{X}_p^{\dagger} $$
+$$\hat{\mathbf{H}} = \mathbf{Y}_p \mathbf{X}_p^{\dagger}$$
 
 where $\dagger$ denotes the Moore-Penrose pseudoinverse.
 
@@ -297,9 +301,9 @@ where $\dagger$ denotes the Moore-Penrose pseudoinverse.
 
 We apply a linear filter $\mathbf{W}$ to recover the symbols. The **Minimum Mean Square Error (MMSE)** filter balances noise enhancement and interference suppression:
 
-$$ \mathbf{W}_{MMSE} = \left(\hat{\mathbf{H}}^H \hat{\mathbf{H}} + \sigma^2 \mathbf{I}\right)^{-1} \hat{\mathbf{H}}^H $$
+$$\mathbf{W}_{MMSE} = \left(\hat{\mathbf{H}}^H \hat{\mathbf{H}} + \sigma^2 \mathbf{I}\right)^{-1} \hat{\mathbf{H}}^H$$
 
-$$ \hat{\mathbf{s}} = \mathbf{W}_{MMSE} \mathbf{y} $$
+$$\hat{\mathbf{s}} = \mathbf{W}_{MMSE} \mathbf{y}$$
 
 **Why MMSE instead of Zero-Forcing (ZF)?**
 *   ZF: $\mathbf{W}_{ZF} = \hat{\mathbf{H}}^{-1}$ completely removes interference but amplifies noise
@@ -309,7 +313,7 @@ $$ \hat{\mathbf{s}} = \mathbf{W}_{MMSE} \mathbf{y} $$
 
 Even after MMSE, there may be a residual "piston phase" (common phase rotation $\phi_{err}$) caused by turbulence. We estimate this using the **4th power method** for QPSK:
 
-$$ \phi_{err} = \frac{1}{4} \arg\left(\sum_n \hat{s}_n^4\right) $$
+$$\phi_{err} = \frac{1}{4} \arg\left(\sum_n \hat{s}_n^4\right)$$
 
 Then correct: $\hat{\mathbf{s}}_{corr} = \hat{\mathbf{s}} \cdot e^{-i \phi_{err}}$
 
@@ -389,7 +393,9 @@ Output: [Batch, N_modes, 2] (Real & Imag parts)
 #### Training Configuration
 
 *   **Loss Function**: Mean Squared Error (MSE) between predicted and true symbols
-    $$ \mathcal{L} = \frac{1}{N} \sum_{i=1}^{N} |\hat{s}_i - s_i|^2 $$
+    
+    $$\mathcal{L} = \frac{1}{N} \sum_{i=1}^{N} |\hat{s}_i - s_i|^2$$
+    
 *   **Optimizer**: Adam with learning rate $10^{-4}$
 *   **Batch Size**: 32
 *   **Epochs**: 50-100 (with early stopping)
@@ -639,4 +645,3 @@ FSO beam recovery/
     *   DVB-S2 Standard: ETSI EN 302 307
 
 ---
-
