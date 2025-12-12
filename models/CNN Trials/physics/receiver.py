@@ -340,16 +340,16 @@ class ChannelEstimator:
                 return self.noise_var_est
             
             # CRITICAL FIX: Use true noise variance from metadata
-            if 'noise_var_per_pixel' in tx_frame.metadata:
-                noise_var_per_pixel = tx_frame.metadata['noise_var_per_pixel']
-                # Convert per-pixel variance to per-symbol variance
-                # The projection sums over pixels, so variance scales with number of pixels
-                # But we want the noise variance in the symbol domain after projection
-                # For now, use the per-pixel value as a conservative estimate
-                self.noise_var_est = max(noise_var_per_pixel, 1e-12)
-                snr_db = tx_frame.metadata.get('snr_db', 'unknown')
-                print(f"   [DEBUG] Using true noise_var from metadata: {self.noise_var_est:.3e} (SNR={snr_db}dB)")
-                return self.noise_var_est
+            # if 'noise_var_per_pixel' in tx_frame.metadata:
+            #     noise_var_per_pixel = tx_frame.metadata['noise_var_per_pixel']
+            #     # Convert per-pixel variance to per-symbol variance
+            #     # The projection sums over pixels, so variance scales with number of pixels
+            #     # But we want the noise variance in the symbol domain after projection
+            #     # For now, use the per-pixel value as a conservative estimate
+            #     self.noise_var_est = max(noise_var_per_pixel, 1e-12)
+            #     snr_db = tx_frame.metadata.get('snr_db', 'unknown')
+            #     print(f"   [DEBUG] Using true noise_var from metadata: {self.noise_var_est:.3e} (SNR={snr_db}dB)")
+            #     return self.noise_var_est
         else:
             print(f"   [DEBUG] No metadata or noise_disabled flag not found")  # DEBUG
         

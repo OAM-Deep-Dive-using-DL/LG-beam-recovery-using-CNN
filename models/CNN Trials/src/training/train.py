@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-import h5py
+
 import numpy as np
 import argparse
 from pathlib import Path
@@ -11,53 +11,7 @@ import matplotlib.pyplot as plt
 
 from model import MultiHeadResNet
 
-class FSODataset(Dataset):
-    def __init__(self, h5_path, split='train'):
-        self.h5_path = h5_path
-        self.split = split
-        
-        # Open file to read metadata (keep open? or open per access? 
-        # h5py is not thread-safe with multiprocessing dataloaders usually.
-        # Best practice: Open in __getitem__ or use 'swmr' mode if writing.
-        # Since we are reading static files, we can open in __init__ but need care with workers.
-        # Actually, for PyTorch DataLoader with num_workers > 0, we should open in __getitem__.
-        # But that's slow. 
-        # Solution: Open in __init__, but close and reopen in worker_init_fn?
-        # Simpler: Read all into memory if small (25k samples * 16KB = 400MB -> Easy).
-        
-        print(f"Loading {split} data from {h5_path} into RAM...")
-        with h5py.File(h5_path, 'r') as f:
-            self.intensity = f['intensity'][:]
-            self.symbols = f['symbols'][:]
-            self.cn2 = f['cn2'][:]
-            self.n_modes = f.attrs['n_modes']
-            
-        # Normalize intensity to [0, 1] if not already (it should be)
-        # Add channel dim: [N, 64, 64] -> [N, 1, 64, 64]
-        self.intensity = np.expand_dims(self.intensity, axis=1)
-        
-        print(f"Loaded {len(self.intensity)} samples.")
-
-    def __len__(self):
-        return len(self.intensity)
-
-    def __getitem__(self, idx):
-        # Inputs
-        img = torch.from_numpy(self.intensity[idx]).float()
-        
-        # Targets
-        sym = torch.from_numpy(self.symbols[idx]).float() # [8, 2]
-        
-        # Power target: Magnitude of symbols (should be 1.0 for QPSK)
-        # But if we had fading, it might vary. For now, QPSK is constant envelope.
-        # So target power is all 1s.
-        # Wait, if a mode is NOT transmitted, power is 0.
-        # But in our dataset, we transmit ALL modes currently?
-        # Let's check config. Yes, we sum all modes.
-        # So power target is always 1.0 for active modes.
-        pwr = torch.ones(self.n_modes).float()
-        
-        return img, sym, pwr
+from utils.dataset import FSODataset
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")

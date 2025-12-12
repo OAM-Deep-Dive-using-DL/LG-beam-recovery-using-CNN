@@ -149,9 +149,14 @@ def run_e2e_simulation(config, verbose=True):
     )
 
 
+    # Calculate exact info bits needed for full frames
+    ldpc_k = transmitter.ldpc.k
+    num_ldpc_blocks = getattr(cfg, "LDPC_BLOCKS", 4)
+    n_info_bits_needed = ldpc_k * num_ldpc_blocks
+    
     # Generate original data bits
-    data_bits = np.random.randint(0, 2, cfg.N_INFO_BITS)
-    print(f"Generated {len(data_bits)} info bits.")
+    data_bits = np.random.randint(0, 2, n_info_bits_needed)
+    print(f"Generated {len(data_bits)} info bits (aligned to k={ldpc_k} * {num_ldpc_blocks} blocks).")
 
     # Generate the full frame of symbols
     tx_frame = transmitter.transmit(data_bits, verbose=True)
@@ -230,7 +235,7 @@ def run_e2e_simulation(config, verbose=True):
     # CRITICAL FIX: Store attenuation factor in tx_frame metadata for RX reference field matching
     if not hasattr(tx_frame, 'metadata') or tx_frame.metadata is None:
         tx_frame.metadata = {}
-    tx_frame.metadata['amplitude_loss'] = amplitude_loss
+    # tx_frame.metadata['amplitude_loss'] = amplitude_loss # Removed to enforce blind receiver
     tx_frame.metadata['mode_collection_eff'] = per_mode_eta.copy()
 
     # Aperture mask & area (reuse later)
@@ -318,10 +323,6 @@ def run_e2e_simulation(config, verbose=True):
         noise_var_per_pixel = avg_pixel_intensity / snr_linear
         noise_std_per_pixel = np.sqrt(noise_var_per_pixel)
         
-        # CRITICAL FIX: Store true noise variance in metadata for receiver
-        tx_frame.metadata['noise_var_per_pixel'] = float(noise_var_per_pixel)
-        tx_frame.metadata['snr_db'] = float(cfg.SNR_DB)
-
         # FIXED: Validate P_rx from probe
         P_rx_probe = np.sum(np.abs(E_rx_probe)**2) * dA
         print(f"    Target SNR: {cfg.SNR_DB} dB")
@@ -332,8 +333,6 @@ def run_e2e_simulation(config, verbose=True):
     else:
         print("    Noise disabled.")
         noise_std_per_pixel = 0.0
-        tx_frame.metadata['noise_var_per_pixel'] = 0.0
-        tx_frame.metadata['snr_db'] = float('inf')
 
     # 3d. Loop over all symbols (PHYSICAL PROPAGATION)
     print(f"[4] Propagating {n_symbols} symbols through channel...")

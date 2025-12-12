@@ -700,10 +700,20 @@ if __name__ == "__main__":
         action="store_true",
         help="When sweeping Cn², save plots for each operating point."
     )
+    parser.add_argument(
+        "--snr",
+        type=float,
+        default=35.0,
+        help="Signal-to-Noise Ratio in dB (default: 35.0)"
+    )
     args = parser.parse_args()
 
     if args.cn2_sweep:
         cn2_values = args.cn2_sweep
+        # Note: Sweep uses default SNR from config unless we plumb it through run_cn2_sweep
+        # For now, we leave sweep as-is or we could modify SimulationConfig class attribute globally
+        SimulationConfig.SNR_DB = args.snr 
+        
         run_cn2_sweep(
             SimulationConfig,
             cn2_values,
@@ -713,6 +723,9 @@ if __name__ == "__main__":
     else:
         # Single-run path
         config = SimulationConfig()
+        config.SNR_DB = args.snr  # Apply CLI SNR
+        config.ADD_NOISE = True   # Enable noise for single runs
+        
         if args.disable_power_probe:
             config.ENABLE_POWER_PROBE = False
 

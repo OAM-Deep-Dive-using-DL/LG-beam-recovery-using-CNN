@@ -318,51 +318,44 @@ class ChannelEstimator:
 
     def estimate_noise_variance(self, rx_symbols_per_mode: Dict[Tuple[int,int], np.ndarray], tx_frame: FSO_MDM_Frame, H_est: np.ndarray):
         """
-        Estimate noise variance for MMSE equalization.
+        Estimate noise variance from pilot residuals for MMSE equalization.
         
-        CRITICAL FIX: Use true noise variance from metadata instead of biased residual estimate.
-        The residual-based method (Y_p - H_est @ P_p) includes:
-        - Channel estimation error
-        - Turbulence effects not captured by LS estimate  
-        - Actual noise
-        This causes massive over-estimation (e.g., 0.43 instead of 1e-9), making MMSE useless.
-        
-        Solution: Use the true noise variance calculated from SNR in pipeline.py.
+        Calculates residual variance: var = mean(|Y_p - H_est @ P_p|^2)
+        This value represents the effective noise + unmodeled interference in the symbol domain.
         """
-        # Check if noise is disabled in metadata
-        if hasattr(tx_frame, 'metadata') and tx_frame.metadata is not None:
-            noise_disabled = tx_frame.metadata.get('noise_disabled', False)
-            print(f"   [DEBUG] noise_disabled flag found: {noise_disabled}")  # DEBUG
-            if noise_disabled:
-                # Use tiny epsilon for ZF-like behavior (prevents over-regularization)
-                self.noise_var_est = 1e-6
-                print(f"   [DEBUG] Noise disabled → forcing noise_var = 1e-6 (ZF-like)")  # DEBUG
-                return self.noise_var_est
-            
-            # CRITICAL FIX: Use true noise variance from metadata
-            if 'noise_var_per_pixel' in tx_frame.metadata:
-                noise_var_per_pixel = tx_frame.metadata['noise_var_per_pixel']
-                # Convert per-pixel variance to per-symbol variance
-                # The projection sums over pixels, so variance scales with number of pixels
-                # But we want the noise variance in the symbol domain after projection
-                # For now, use the per-pixel value as a conservative estimate
-                self.noise_var_est = max(noise_var_per_pixel, 1e-12)
-                snr_db = tx_frame.metadata.get('snr_db', 'unknown')
-                print(f"   [DEBUG] Using true noise_var from metadata: {self.noise_var_est:.3e} (SNR={snr_db}dB)")
-                return self.noise_var_est
-        else:
-            print(f"   [DEBUG] No metadata or noise_disabled flag not found")  # DEBUG
-        
-        # Fallback: estimate from pilot residuals (biased, but better than nothing)
-        print(f"   [DEBUG] WARNING: No noise_var in metadata, falling back to residual estimate (biased!)")
+        # Gather pilot observations (Y_p) and transmitted pilot symbols (P_p)
         Y_p, P_p, pilot_pos = self._gather_pilots(rx_symbols_per_mode, tx_frame)
+        
+        # Verify valid data exists
         if Y_p is None or P_p is None or P_p.size == 0:
+            warnings.warn("Insufficient pilots for noise estimation. Defaulting to 1e-6.")
             self.noise_var_est = 1e-6
             return self.noise_var_est
-        residual = Y_p - H_est @ P_p
-        noise_var = np.mean(np.abs(residual) ** 2)
-        self.noise_var_est = max(noise_var, 1e-12)
-        print(f"   [DEBUG] Estimated noise_var from residuals (BIASED): {noise_var:.3e}")  # DEBUG
+
+        try:
+            # 1. Calculate Estimated Pilot Signals: Y_hat = H * P
+            Y_hat = H_est @ P_p
+            
+            # 2. Compute Residuals: E = Y_observed - Y_estimated
+            # This captures AWGN + Channel Estimation Error + Uncorrected Phase Noise
+            residuals = Y_p - Y_hat
+            
+            # 3. Compute Variance: mean(|E|^2)
+            # We average over all modes and all pilot symbols
+            noise_var = np.mean(np.abs(residuals) ** 2)
+            
+            # Safety floor to avoid numerical instability in MMSE inversion
+            self.noise_var_est = max(noise_var, 1e-12)
+            
+            # Debug output
+            snr_est_linear = 1.0 / self.noise_var_est if self.noise_var_est > 0 else 0
+            snr_est_db = 10 * np.log10(snr_est_linear) if snr_est_linear > 0 else 0
+            print(f"   [Noise Est] Residual Variance: {self.noise_var_est:.3e} (Est SNR: ~{snr_est_db:.1f} dB)")
+            
+        except Exception as e:
+            warnings.warn(f"Noise estimation failed: {e}. Defaulting to 1e-6.")
+            self.noise_var_est = 1e-6
+
         return self.noise_var_est
 
 

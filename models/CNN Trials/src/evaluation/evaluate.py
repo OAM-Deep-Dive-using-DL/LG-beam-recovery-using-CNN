@@ -7,7 +7,7 @@ from tqdm import tqdm
 import argparse
 
 from model import MultiHeadResNet
-from train import FSODataset
+from utils.dataset import FSODataset
 
 def qpsk_demod(symbols_complex):
     """
@@ -172,6 +172,10 @@ def evaluate(args):
     plt.ylim(bottom=0)
     plt.savefig("evaluation_ber_curve.png")
     print("\nSaved 'evaluation_ber_curve.png'")
+    
+    # Save Data for Comparison Plotting
+    np.savez("cnn_results.npz", cn2=unique_cn2, ber=ber_per_cn2)
+    print("Saved 'cnn_results.npz'")
     
     # 5. Constellation Plot (Subset)
     plt.figure(figsize=(8, 8))

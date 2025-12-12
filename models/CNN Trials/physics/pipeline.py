@@ -150,8 +150,14 @@ def run_e2e_simulation(config, verbose=True):
 
 
     # Generate original data bits
-    data_bits = np.random.randint(0, 2, cfg.N_INFO_BITS)
-    print(f"Generated {len(data_bits)} info bits.")
+    # Calculate exact info bits needed for full frames
+    ldpc_k = transmitter.ldpc.k
+    num_ldpc_blocks = getattr(cfg, "LDPC_BLOCKS", 4)
+    n_info_bits_needed = ldpc_k * num_ldpc_blocks
+
+    # Generate original data bits
+    data_bits = np.random.randint(0, 2, n_info_bits_needed)
+    print(f"Generated {len(data_bits)} info bits (aligned to k={ldpc_k} * {num_ldpc_blocks} blocks).")
 
     # Generate the full frame of symbols
     tx_frame = transmitter.transmit(data_bits, verbose=True)
@@ -230,7 +236,7 @@ def run_e2e_simulation(config, verbose=True):
     # CRITICAL FIX: Store attenuation factor in tx_frame metadata for RX reference field matching
     if not hasattr(tx_frame, 'metadata') or tx_frame.metadata is None:
         tx_frame.metadata = {}
-    tx_frame.metadata['amplitude_loss'] = amplitude_loss
+    # tx_frame.metadata['amplitude_loss'] = amplitude_loss # Removed for blind receiver
     tx_frame.metadata['mode_collection_eff'] = per_mode_eta.copy()
 
     # Aperture mask & area (reuse later)
@@ -319,8 +325,8 @@ def run_e2e_simulation(config, verbose=True):
         noise_std_per_pixel = np.sqrt(noise_var_per_pixel)
         
         # CRITICAL FIX: Store true noise variance in metadata for receiver
-        tx_frame.metadata['noise_var_per_pixel'] = float(noise_var_per_pixel)
-        tx_frame.metadata['snr_db'] = float(cfg.SNR_DB)
+        # tx_frame.metadata['noise_var_per_pixel'] = float(noise_var_per_pixel) # Removed for blind receiver
+        # tx_frame.metadata['snr_db'] = float(cfg.SNR_DB) # Removed for blind receiver
 
         # FIXED: Validate P_rx from probe
         P_rx_probe = np.sum(np.abs(E_rx_probe)**2) * dA
@@ -426,6 +432,7 @@ def run_e2e_simulation(config, verbose=True):
         'tx_signals': tx_signals,
         'E_tx_visualization': E_tx_visualization,
         'E_rx_visualization': E_rx_visualization,
+        'E_rx_sequence': E_rx_sequence,  # ADDED: Full sequence for dataset generation
         'H_est': metrics['H_est']
     }
 

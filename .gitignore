@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+# # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -108,10 +108,7 @@ ENV/
 env.bak/
 venv.bak/
 
-
-archive/
-models/Swin_Transformer_Trials
-models/CNN + LDPC trials
+# models/CNN + LDPC trials
 
 # Spyder project settings
 .spyderproject
@@ -171,4 +168,11 @@ Thumbs.db
 # Large dataset files (uncomment if you want to track them)
 # *.h5
 # *.hdf5
+
+
+*.h5
+*.hdf5
+*.pth
+*.pt
+*.ckpt
 
