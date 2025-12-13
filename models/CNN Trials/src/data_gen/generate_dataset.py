@@ -107,58 +107,58 @@ class DatasetGenerator:
             
             f.attrs['n_modes'] = 8
             
-            # SYSTEMATIC SWEEP: 50 points from 1e-18 to 1e-12
-            n_sweep_points = 50
-            log_cn2_values = np.linspace(np.log10(1e-18), np.log10(1e-12), n_sweep_points)
-            samples_per_point = 400 # 2 frames approx
+            # Random Uniform Sampling for Training (Hard Mode)
+            # Range: 10^-16.5 to 10^-13.5
+            min_log_cn2 = -16.5
+            max_log_cn2 = -13.5
             
             total_collected = 0
-            target_total = n_sweep_points * samples_per_point
+            # We don't use 'samples_per_point' or 'sweep' logic anymore.
+            # We just target self.n_samples
             
-            pbar = tqdm(total=target_total, unit="samp")
+            pbar = tqdm(total=self.n_samples, unit="samp")
             
-            for point_idx, log_cn2 in enumerate(log_cn2_values):
+            while total_collected < self.n_samples:
+                # Pick random Cn2 for this simulation run (batch of frames)
+                log_cn2 = np.random.uniform(min_log_cn2, max_log_cn2)
                 current_cn2 = 10**log_cn2
+                
                 GenConfig.CN2 = current_cn2
                 
-                # Collect enough samples for this point
-                point_collected = 0
-                while point_collected < samples_per_point:
-                    results = run_e2e_simulation(GenConfig, verbose=False)
+                results = run_e2e_simulation(GenConfig, verbose=False)
+            
+                if results is None:
+                    continue
+                    
+                rx_sequence = results['E_rx_sequence']
+                tx_signals = results['tx_signals']
                 
-                    if results is None:
-                        continue
-                        
-                    rx_sequence = results['E_rx_sequence']
-                    tx_signals = results['tx_signals']
-                    
-                    n_syms = len(rx_sequence)
-                    modes = sorted(tx_signals.keys())
-                    
-                    batch_intensity = np.zeros((n_syms, self.img_size, self.img_size), dtype=np.float32)
-                    batch_symbols = np.zeros((n_syms, 8, 2), dtype=np.float32)
-                    batch_cn2 = np.full((n_syms,), current_cn2, dtype=np.float32)
-                    
-                    for t in range(n_syms):
-                        img_complex = rx_sequence[t]
-                        batch_intensity[t] = self.resize_image(img_complex, self.img_size)
-                        for m_idx, mode in enumerate(modes):
-                            sym = tx_signals[mode]['symbols'][t]
-                            batch_symbols[t, m_idx, 0] = sym.real
-                            batch_symbols[t, m_idx, 1] = sym.imag
-                    
-                    ds_intensity.resize(total_collected + n_syms, axis=0)
-                    ds_symbols.resize(total_collected + n_syms, axis=0)
-                    ds_cn2.resize(total_collected + n_syms, axis=0)
-                    
-                    ds_intensity[total_collected:] = batch_intensity
-                    ds_symbols[total_collected:] = batch_symbols
-                    ds_cn2[total_collected:] = batch_cn2
-                    
-                    total_collected += n_syms
-                    point_collected += n_syms
-                    pbar.update(n_syms)
+                n_syms = len(rx_sequence)
+                modes = sorted(tx_signals.keys())
                 
+                batch_intensity = np.zeros((n_syms, self.img_size, self.img_size), dtype=np.float32)
+                batch_symbols = np.zeros((n_syms, 8, 2), dtype=np.float32)
+                batch_cn2 = np.full((n_syms,), current_cn2, dtype=np.float32)
+                
+                for t in range(n_syms):
+                    img_complex = rx_sequence[t]
+                    batch_intensity[t] = self.resize_image(img_complex, self.img_size)
+                    for m_idx, mode in enumerate(modes):
+                        sym = tx_signals[mode]['symbols'][t]
+                        batch_symbols[t, m_idx, 0] = sym.real
+                        batch_symbols[t, m_idx, 1] = sym.imag
+                
+                ds_intensity.resize(total_collected + n_syms, axis=0)
+                ds_symbols.resize(total_collected + n_syms, axis=0)
+                ds_cn2.resize(total_collected + n_syms, axis=0)
+                
+                ds_intensity[total_collected:] = batch_intensity
+                ds_symbols[total_collected:] = batch_symbols
+                ds_cn2[total_collected:] = batch_cn2
+                
+                total_collected += n_syms
+                pbar.update(n_syms)
+
             pbar.close()
             print(f"saved successfully to {self.h5_path}")
 

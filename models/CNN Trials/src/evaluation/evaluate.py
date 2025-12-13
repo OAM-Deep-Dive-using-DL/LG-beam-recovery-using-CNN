@@ -9,6 +9,57 @@ import argparse
 from model import MultiHeadResNet
 from utils.dataset import FSODataset
 
+def calculate_throughput(ber, n_modes=8, symbol_rate_ghz=1.0, ldpc_rate=0.8135, pilot_overhead=0.1):
+    """
+    Calculate effective throughput accounting for System Overhead.
+    
+    CORRECTION (Post-Audit):
+    The neural network is trained on the full physical layer frames, which include:
+    1. LDPC Encoding (Rate 0.8135)
+    2. Pilot Symbols (10%)
+    
+    Therefore, the network acts as a "Neural Equalizer" replacing the MMSE block.
+    It produces coded symbols which must still be LDPC decoded.
+    Thus, the throughput ceiling is the same as the classical system (11.7 Gbps),
+    NOT 16 Gbps. The advantage is RESILIENCE (Link Availability), not Peak Rate.
+    
+    Args:
+        ber: Coded Bit Error Rate (Raw BER before LDPC)
+        n_modes: Number of spatial modes (default: 8)
+        symbol_rate_ghz: Symbol rate in GSymbol/s (default: 1.0)
+    
+    Returns:
+        throughput_gbps: Effective throughput in Gbps
+    """
+    bits_per_symbol = 2  # QPSK
+    
+    # 1. Raw Line Rate
+    raw_line_rate = n_modes * bits_per_symbol * symbol_rate_ghz # 16 Gbps
+    
+    # 2. Account for Pilots (10%)
+    # Network outputs pilots, but they carry no data
+    data_symbol_rate = raw_line_rate * (1 - pilot_overhead) # 14.4 Gbps
+    
+    # 3. Account for LDPC (Rate 0.8135)
+    # Network outputs coded bits, we need info bits
+    info_bit_rate = data_symbol_rate * ldpc_rate # 11.7 Gbps
+    
+    # LDPC Threshold (Soft Decision)
+    fec_threshold = 0.038  # 3.8% Raw BER
+    
+    if ber < fec_threshold:
+        # LDPC corrects errors -> Full Info Rate
+        throughput = info_bit_rate
+    elif ber < 0.15:
+        # Partial degradation
+        degradation = (ber - fec_threshold) / (0.15 - fec_threshold)
+        throughput = info_bit_rate * (1 - 0.7 * degradation)
+    else:
+        # Link Failure
+        throughput = 0.0
+    
+    return throughput
+
 def qpsk_demod(symbols_complex):
     """
     Demodulate complex symbols to bits (QPSK).
@@ -35,8 +86,10 @@ def evaluate(args):
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     
     # Load Model
-    model = MultiHeadResNet(n_modes=test_dataset.n_modes).to(device)
-    model.load_state_dict(torch.load("best_model.pth", map_location=device))
+    model = MultiHeadResNet(n_modes=test_dataset.n_modes, backbone_name=args.backbone).to(device)
+    model_path = f"best_model_{args.backbone}.pth"
+    print(f"Loading model from {model_path}...")
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
     all_preds = []
@@ -104,6 +157,7 @@ def evaluate(args):
     print("-" * 46)
     
     ber_per_cn2 = []
+    throughput_per_cn2 = []
     
     for val in unique_cn2:
         mask = (all_cn2 == val)
@@ -129,8 +183,12 @@ def evaluate(args):
         
         count = np.sum(mask)
         
+        # Calculate throughput for this Cn2
+        throughput_gbps = calculate_throughput(subset_ber)
+        
         print(f"{val:.2e}     | {subset_ber:.4f}   | {subset_ser:.4f}   | {count:<8}")
         ber_per_cn2.append(subset_ber)
+        throughput_per_cn2.append(throughput_gbps)
 
     # 4. Diagnosis Statistics
     print(f"\n{'='*40}")
@@ -173,8 +231,58 @@ def evaluate(args):
     plt.savefig("evaluation_ber_curve.png")
     print("\nSaved 'evaluation_ber_curve.png'")
     
+    # 6. Plot Throughput vs Cn2
+    plt.figure(figsize=(10, 6))
+    plt.semilogx(unique_cn2, throughput_per_cn2, 's-', linewidth=2, color='green', markersize=6)
+    plt.grid(True, which="both", ls="-", alpha=0.4)
+    plt.xlabel('Turbulence Strength ($C_n^2$) [$m^{-2/3}$]', fontsize=12)
+    plt.ylabel('Throughput (Gbps)', fontsize=12)
+    plt.title('Effective Throughput vs. Turbulence Strength', fontsize=14)
+    
+    # Add reference line for max throughput
+    max_throughput = calculate_throughput(0.0)  # BER = 0
+    plt.axhline(max_throughput, color='blue', linestyle='--', linewidth=1, alpha=0.5, label=f'Max Rate ({max_throughput:.1f} Gbps)')
+    
+    # Add FEC threshold marker
+    plt.axhline(max_throughput * 0.5, color='orange', linestyle=':', linewidth=1, alpha=0.5, label='Degraded (50%)')
+    plt.axhline(0, color='red', linestyle=':', linewidth=1, alpha=0.5, label='Link Failure')
+    
+    plt.legend(fontsize=10)
+    plt.ylim(bottom=-0.5, top=max_throughput * 1.1)
+    plt.savefig("evaluation_throughput_curve.png", dpi=300)
+    print("Saved 'evaluation_throughput_curve.png'")
+    
+    # 7. Combined BER + Throughput Plot (Dual Y-axis)
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # BER on left axis
+    color1 = 'tab:red'
+    ax1.set_xlabel('Turbulence Strength ($C_n^2$) [$m^{-2/3}$]', fontsize=12)
+    ax1.set_ylabel('Bit Error Rate (BER)', color=color1, fontsize=12)
+    ax1.semilogx(unique_cn2, ber_per_cn2, 'o-', color=color1, linewidth=2, markersize=6, label='BER')
+    ax1.tick_params(axis='y', labelcolor=color1)
+    ax1.grid(True, which="both", ls="-", alpha=0.3)
+    ax1.set_ylim(bottom=0, top=max(ber_per_cn2) * 1.1)
+    
+    # Throughput on right axis
+    ax2 = ax1.twinx()
+    color2 = 'tab:green'
+    ax2.set_ylabel('Throughput (Gbps)', color=color2, fontsize=12)
+    ax2.semilogx(unique_cn2, throughput_per_cn2, 's-', color=color2, linewidth=2, markersize=6, label='Throughput')
+    ax2.tick_params(axis='y', labelcolor=color2)
+    ax2.set_ylim(bottom=-0.5, top=max_throughput * 1.1)
+    
+    # Add FEC threshold annotation
+    ax1.axhline(0.038, color='orange', linestyle='--', linewidth=1, alpha=0.5)
+    ax1.text(unique_cn2[0], 0.04, 'FEC Threshold (3.8%)', fontsize=9, color='orange')
+    
+    plt.title('BER and Throughput vs. Turbulence Strength', fontsize=14)
+    fig.tight_layout()
+    plt.savefig("evaluation_ber_throughput_combined.png", dpi=300)
+    print("Saved 'evaluation_ber_throughput_combined.png'")
+    
     # Save Data for Comparison Plotting
-    np.savez("cnn_results.npz", cn2=unique_cn2, ber=ber_per_cn2)
+    np.savez("cnn_results.npz", cn2=unique_cn2, ber=ber_per_cn2, throughput=throughput_per_cn2)
     print("Saved 'cnn_results.npz'")
     
     # 5. Constellation Plot (Subset)
@@ -199,6 +307,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=Path, default=Path('dataset'))
     parser.add_argument('--dataset_name', type=str, default='fso_oam_turbulence_v1')
+    parser.add_argument('--backbone', type=str, default='resnet18', choices=['resnet18', 'resnet18_cbam'])
     parser.add_argument('--batch_size', type=int, default=32)
     args = parser.parse_args()
     

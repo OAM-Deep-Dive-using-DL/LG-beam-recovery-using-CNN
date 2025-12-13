@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from resnet_cbam import resnet18_cbam
 
 class MultiHeadResNet(nn.Module):
     """
@@ -14,13 +15,17 @@ class MultiHeadResNet(nn.Module):
     2. Power Head (Classification/Regression): Predicts mode power presence.
        Output: [batch, n_modes] (Sigmoid activation)
     """
-    def __init__(self, n_modes=8, input_channels=1):
+    def __init__(self, n_modes=8, input_channels=1, backbone_name='resnet18'):
         super(MultiHeadResNet, self).__init__()
         
-        # Load ResNet-18
-        # We don't use pretrained weights because our input is very different (1-channel, OAM patterns)
-        self.backbone = models.resnet18(weights=None)
-        
+        # Load Backbone
+        if backbone_name == 'resnet18':
+            self.backbone = models.resnet18(weights='IMAGENET1K_V1')
+        elif backbone_name == 'resnet18_cbam':
+            self.backbone = resnet18_cbam(pretrained=False) # No imagenet weights for custom structure
+        else:
+            raise ValueError(f"Unknown backbone: {backbone_name}")
+            
         # Modify first layer for 1-channel input (Intensity)
         # Original: nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         # We keep stride=2 for 64x64 -> 32x32
