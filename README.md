@@ -308,49 +308,6 @@ python src/evaluation/plot_comparison.py
 
 ---
 
-## Project Structure
-
-```
-FSO-beam-recovery/
-├── models/
-│   ├── CNN Trials/                    # Neural Receiver (Main Project)
-│   │   ├── src/
-│   │   │   ├── models/
-│   │   │   │   ├── model.py          # MultiHeadResNet (main model)
-│   │   │   │   ├── resnet_cbam.py    # ResNet-18 + CBAM
-│   │   │   │   └── attention.py      # CBAM implementation
-│   │   │   ├── training/
-│   │   │   │   └── train.py          # Training loop
-│   │   │   ├── evaluation/
-│   │   │   │   ├── evaluate.py       # BER/SER metrics
-│   │   │   │   └── plot_comparison.py # Generate comparison plots
-│   │   │   ├── data_gen/
-│   │   │   │   └── generate_dataset.py # Physics simulator wrapper
-│   │   │   └── utils/
-│   │   │       └── dataset.py        # PyTorch Dataset class
-│   │   ├── physics/                  # Split-Step Propagation Engine
-│   │   │   ├── transmitter.py
-│   │   │   ├── channel.py
-│   │   │   └── receiver.py
-│   │   ├── data/                     # HDF5 datasets (git-ignored)
-│   │   ├── outputs/
-│   │   │   ├── checkpoints/          # Trained models (.pth)
-│   │   │   ├── plots/                # Result figures
-│   │   │   ├── logs/                 # NPZ files
-│   │   │   └── reports/              # Markdown summaries
-│   │   └── README.md                 # Usage instructions
-│   │
-│   └── LDPC + Pilot + MMSE trials/   # Classical Baseline
-│       ├── lgBeam.py                 # Main simulation script
-│       └── plots - .../              # Classical receiver results
-│
-├── requirements.txt
-├── LICENSE
-└── README.md                         # This file
-```
-
----
-
 ## Citation
 
 If you use this code in your research, please cite:
@@ -370,16 +327,6 @@ If you use this code in your research, please cite:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgments
-
-- **Physics Simulator**: Based on the Split-Step Fourier Method (Andrews & Phillips, 2005)
-- **CBAM Module**: Adapted from Woo et al., "CBAM: Convolutional Block Attention Module," ECCV 2018
-- **Turbulence Model**: Von Karman spectrum (Kolmogorov, 1941)
-
----
 
 <div align="center">
 
