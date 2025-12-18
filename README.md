@@ -361,7 +361,7 @@ If you use this code in your research, please cite:
   title = {Deep Learning for OAM Beam Recovery in Atmospheric Turbulence},
   year = {2024},
   publisher = {GitHub},
-  url = {https://github.com/yourusername/FSO-beam-recovery}
+  url = {https://github.com/srivatsadavuluriiii/FSO-beam-recovery}
 }
 ```
 
