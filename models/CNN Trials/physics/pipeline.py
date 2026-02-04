@@ -48,7 +48,7 @@ class SimulationConfig:
     CN2_MODEL = "uniform"  # Horizontal path → uniform profile; set "hufnagel_valley" for vertical links
     WEATHER = 'clear'
     FEC_RATE = 0.8
-    PILOT_RATIO = 0.1
+    PILOT_RATIO = 0.2  # FIXED: Was 0.1, now matches config.json (20% pilot power)
     N_INFO_BITS = 819 * 8  # Multiple of total k_ldpc = FEC_RATE * 1024 * n_modes
     N_GRID = 512
     OVERSAMPLING = 2
@@ -324,9 +324,11 @@ def run_e2e_simulation(config, verbose=True):
         noise_var_per_pixel = avg_pixel_intensity / snr_linear
         noise_std_per_pixel = np.sqrt(noise_var_per_pixel)
         
-        # CRITICAL FIX: Store true noise variance in metadata for receiver
-        # tx_frame.metadata['noise_var_per_pixel'] = float(noise_var_per_pixel) # Removed for blind receiver
-        # tx_frame.metadata['snr_db'] = float(cfg.SNR_DB) # Removed for blind receiver
+        # CRITICAL: Store true noise variance in metadata for MMSE equalization
+        # This enables fair head-to-head comparisons (CNN vs MMSE) using true variance
+        # instead of biased residual estimates
+        tx_frame.metadata['noise_var_per_pixel'] = float(noise_var_per_pixel)
+        tx_frame.metadata['snr_db'] = float(cfg.SNR_DB)
 
         # FIXED: Validate P_rx from probe
         P_rx_probe = np.sum(np.abs(E_rx_probe)**2) * dA

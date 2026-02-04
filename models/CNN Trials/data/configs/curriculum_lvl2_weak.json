@@ -1,0 +1,88 @@
+{
+    "dataset_name": "curriculum_lvl2_weak",
+    "description": "Curriculum Level 2: Weak Turbulence (1e-17 to 1e-16)",
+    "system_parameters": {
+        "wavelength": 1.55e-6,
+        "w0": 0.025,
+        "distance": 1000,
+        "receiver_diameter": 0.5,
+        "p_tx_total": 1.0,
+        "spatial_modes": [
+            [
+                0,
+                -1
+            ],
+            [
+                0,
+                1
+            ],
+            [
+                0,
+                -3
+            ],
+            [
+                0,
+                3
+            ],
+            [
+                0,
+                -4
+            ],
+            [
+                0,
+                4
+            ],
+            [
+                1,
+                -1
+            ],
+            [
+                1,
+                1
+            ]
+        ],
+        "pilot_parameters": {
+            "enabled": true,
+            "mode": [
+                0,
+                0
+            ],
+            "power_ratio": 0.2
+        }
+    },
+    "turbulence_parameters": {
+        "cn2_min": 1e-17,
+        "cn2_max": 1e-16,
+        "num_cn2_points": 20,
+        "L0": 10.0,
+        "l0_inner": 0.005,
+        "num_screens": 5,
+        "cn2_model": "uniform"
+    },
+    "dataset_size": {
+        "train": 20000,
+        "val": 4000,
+        "test": 4000
+    },
+    "grid_parameters": {
+        "n_grid_sim": 256,
+        "n_grid_output": 128,
+        "oversampling": 2,
+        "downsampling_method": "bilinear"
+    },
+    "data_format": {
+        "input_type": "intensity",
+        "input_channels": 1,
+        "normalize_input": true,
+        "normalization_method": "per_sample"
+    },
+    "augmentation": {
+        "enabled": false,
+        "add_noise": true,
+        "snr_db_range": [
+            20,
+            35
+        ]
+    },
+    "random_seed": 42
+}

@@ -175,17 +175,37 @@ class QPSKModulator:
 
     def plot_constellation(self, ax=None):
         if ax is None:
-            fig, ax = plt.subplots(figsize=(5, 5))
+            fig, ax = plt.subplots(figsize=(6, 6))
+        
+        # Professional Style
+        ax.set_aspect("equal")
+        ax.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.6, color='#bdbdbd')
+        ax.axhline(0, color="black", linewidth=1.0, alpha=0.8)
+        ax.axvline(0, color="black", linewidth=1.0, alpha=0.8)
+        
+        # Plot calibration circle (unit energy)
+        theta = np.linspace(0, 2*np.pi, 200)
+        ax.plot(np.cos(theta), np.sin(theta), color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+
         for bits, s in self.constellation_map.items():
-            ax.plot(s.real, s.imag, "ro")
-            ax.annotate(f"{bits[0]}{bits[1]}", (s.real, s.imag), fontsize=12)
-        ax.axhline(0, color="grey")
-        ax.axvline(0, color="grey")
-        ax.set_xlabel("I")
-        ax.set_ylabel("Q")
-        ax.set_title("QPSK (Gray)")
-        ax.grid(True)
-        ax.axis("equal")
+            # Marker style: large, visible, high contrast
+            ax.plot(s.real, s.imag, "o", markersize=12, markeredgecolor='black', markeredgewidth=1.5, 
+                   color='#D55E00', zorder=10) # Okabe-Ito Vermilion for visibility
+            
+            # Annotation: legible, boxed/offset
+            text = f"{bits[0]}{bits[1]}"
+            ax.annotate(text, (s.real, s.imag), 
+                        xytext=(10, 10), textcoords='offset points',
+                        fontsize=12, fontweight='bold', family='serif',
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8, ec="none"))
+
+        ax.set_xlabel("In-Phase (I)", fontsize=12, fontweight='bold', family='serif')
+        ax.set_ylabel("Quadrature (Q)", fontsize=12, fontweight='bold', family='serif')
+        ax.set_title("QPSK Constellation (Gray Coded)", fontsize=14, fontweight='bold', family='serif', pad=15)
+        
+        # Ticks styling
+        ax.tick_params(axis='both', which='major', labelsize=10, direction='in')
+        
         return ax
 class PyLDPCWrapper:
     def __init__(self, n=2048, rate=0.8, dv=3, dc=None, seed=42):
@@ -647,11 +667,9 @@ class encodingRunner:
                 pn += np.clip(jitter_rad * rng.standard_normal(n_mode), -np.pi, np.pi)
 
 
-            is_pilot_mask = np.isin(np.arange(n_mode), pilot_pos)
-            pn_data_only = pn.copy()
-            pn_data_only[is_pilot_mask] = 0.0  
-            
-            frame_sym *= np.exp(1j * pn_data_only)
+            # Apply phase noise to ALL symbols (including pilots) for physical correctness
+            # The receiver's Blind Phase Search / Channel Estimation must handle this.
+            frame_sym *= np.exp(1j * pn)
 
             if np.mean(np.abs(frame_sym)**2) > 0:
                 frame_sym /= np.sqrt(np.mean(np.abs(frame_sym)**2))
@@ -737,67 +755,100 @@ class encodingRunner:
 
     def plot_system_summary(self, data_bits, frame, plot_dir="plots", save_name="encoding_summary.png"):
         """
-        Generate high-resolution diagnostic plots for the transmitter.
+        Generate publication-quality diagnostic plots for the transmitter.
         Creates individual 600 dpi figures stored under plot_dir/encoding_summary.
         Returns a dictionary of saved file paths.
         """
-        os.makedirs(plot_dir, exist_ok=True)
-        summary_dir = os.path.join(plot_dir, "encoding_summary")
-        os.makedirs(summary_dir, exist_ok=True)
+        # Ensure plot directory structure
+        base_plot_dir = os.path.join(plot_dir, "encoding_summary")
+        os.makedirs(base_plot_dir, exist_ok=True)
 
         saved_paths: Dict[str, str] = {}
 
-        # --- Figure 1: Ideal QPSK constellation
+        # General Style Params for Consistency
+        plt.rcParams['font.family'] = 'serif'
+        plt.rcParams['axes.labelsize'] = 12
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['xtick.labelsize'] = 10
+        plt.rcParams['ytick.labelsize'] = 10
+
+        # --- Figure 1: Ideal QPSK constellation ---
         fig_const, ax_const = plt.subplots(figsize=(6, 6), constrained_layout=True)
         self.qpsk.plot_constellation(ax=ax_const)
-        ax_const.set_title("Ideal QPSK Constellation", fontweight="bold")
-        const_path = os.path.join(summary_dir, "constellation.png")
+        # Title handled inside plot_constellation, but can override if needed
+        const_path = os.path.join(base_plot_dir, "constellation.png")
         fig_const.savefig(const_path, dpi=600, bbox_inches="tight")
         saved_paths["constellation"] = const_path
         plt.close(fig_const)
 
-        # --- Figure 2: Sample transmitted symbols for the first mode
-        # Ideal constellation reference
+        # --- Figure 2: Sample transmitted symbols for the first mode ---
         ideal_points = np.array(list(self.qpsk.constellation_map.values()))
         ideal_bits = list(self.qpsk.constellation_map.keys())
 
         for mode_key in self.spatial_modes:
             sig = frame.tx_signals.get(mode_key, {})
             frame_syms = np.asarray(sig.get("frame", sig.get("symbols", np.array([], dtype=complex))))
-            sample_syms = frame_syms[: min(800, frame_syms.size)] if frame_syms.size else np.array([], dtype=complex)
+            sample_syms = frame_syms[: min(1000, frame_syms.size)] if frame_syms.size else np.array([], dtype=complex)
 
+            # 2a. Raw Scatter Plot
             fig_tx, ax_tx = plt.subplots(figsize=(6, 6), constrained_layout=True)
+            
+            # Calibration circle
+            theta = np.linspace(0, 2*np.pi, 200)
+            ax_tx.plot(np.cos(theta), np.sin(theta), color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+            
             if sample_syms.size:
-                ax_tx.scatter(sample_syms.real, sample_syms.imag, s=12, alpha=0.6, color="#1d4ed8")
-            ax_tx.set_title(f"Transmitted Symbols (mode {mode_key})", fontweight="bold")
-            ax_tx.set_xlabel("In-phase")
-            ax_tx.set_ylabel("Quadrature")
-            ax_tx.grid(True, alpha=0.3)
-            ax_tx.axhline(0, color="grey", linewidth=0.8)
-            ax_tx.axvline(0, color="grey", linewidth=0.8)
+                # Use slightly transparent blue for density visualization
+                ax_tx.scatter(sample_syms.real, sample_syms.imag, s=15, alpha=0.5, 
+                             color="#0072B2", edgecolors='none', label='TX Symbols') # Okabe-Ito Blue
+            
+            ax_tx.set_title(rf"Transmitted Symbols\nMode $\ell={mode_key[1]}, p={mode_key[0]}$", fontweight="bold")
+            ax_tx.set_xlabel("In-Phase (I)")
+            ax_tx.set_ylabel("Quadrature (Q)")
+            ax_tx.grid(True, which='both', linestyle='--', alpha=0.4)
+            ax_tx.axhline(0, color="black", linewidth=0.8, alpha=0.8)
+            ax_tx.axvline(0, color="black", linewidth=0.8, alpha=0.8)
             ax_tx.set_aspect("equal")
-            tx_path = os.path.join(summary_dir, f"tx_symbols_mode_{mode_key[0]}_{mode_key[1]}.png")
+            
+            tx_path = os.path.join(base_plot_dir, f"tx_symbols_mode_{mode_key[0]}_{mode_key[1]}.png")
             fig_tx.savefig(tx_path, dpi=600, bbox_inches="tight")
             saved_paths[f"tx_symbols_mode_{mode_key}"] = tx_path
             plt.close(fig_tx)
 
+            # 2b. Overlay with Ideal Constellation
             fig_overlay, ax_overlay = plt.subplots(figsize=(6, 6), constrained_layout=True)
+            
+            # Plot data first
+            if sample_syms.size:
+                ax_overlay.scatter(sample_syms.real, sample_syms.imag, s=15, alpha=0.4, 
+                                  color="#0072B2", edgecolors='none', label="Simulation Output")
+            
+            # Plot ideal points on top
             for idx, pt in enumerate(ideal_points):
                 bits = ideal_bits[idx]
-                label = "Ideal" if idx == 0 else None
-                ax_overlay.scatter(pt.real, pt.imag, c="red", s=60, marker="o", label=label)
-                ax_overlay.annotate(f"{bits[0]}{bits[1]}", (pt.real + 0.015, pt.imag + 0.015), fontsize=11, color="red")
-            if sample_syms.size:
-                ax_overlay.scatter(sample_syms.real, sample_syms.imag, s=14, alpha=0.6, color="#1d4ed8", label="Transmitted")
-            ax_overlay.axhline(0, color="grey", linewidth=0.8)
-            ax_overlay.axvline(0, color="grey", linewidth=0.8)
-            ax_overlay.set_title(f"Ideal vs Transmitted (mode {mode_key})", fontweight="bold")
-            ax_overlay.set_xlabel("In-phase")
-            ax_overlay.set_ylabel("Quadrature")
-            ax_overlay.legend(loc="upper right")
-            ax_overlay.grid(True, alpha=0.3)
+                label = "Theoretical" if idx == 0 else None
+                ax_overlay.plot(pt.real, pt.imag, marker="o", markersize=10, 
+                               markeredgecolor='black', markeredgewidth=1.5,
+                               color="#D55E00", linestyle='none', label=label, zorder=10) # Red/Orange
+                ax_overlay.annotate(f"{bits[0]}{bits[1]}", (pt.real, pt.imag), 
+                                   xytext=(8, 8), textcoords='offset points',
+                                   fontsize=11, fontweight='bold', family='serif',
+                                   bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7, ec="none"))
+
+            ax_overlay.axhline(0, color="black", linewidth=0.8, alpha=0.8)
+            ax_overlay.axvline(0, color="black", linewidth=0.8, alpha=0.8)
+            ax_overlay.plot(np.cos(theta), np.sin(theta), color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+
+            ax_overlay.set_title(rf"TX vs Ideal Constellation\nMode $\ell={mode_key[1]}, p={mode_key[0]}$", fontweight="bold")
+            ax_overlay.set_xlabel("In-Phase (I)")
+            ax_overlay.set_ylabel("Quadrature (Q)")
+            
+            # Clean Legend
+            ax_overlay.legend(loc="upper right", frameon=True, fancybox=True, shadow=False)
+            ax_overlay.grid(True, which='both', linestyle='--', alpha=0.4)
             ax_overlay.set_aspect("equal")
-            overlay_path = os.path.join(summary_dir, f"mode_{mode_key[0]}_{mode_key[1]}_constellation_overlay.png")
+            
+            overlay_path = os.path.join(base_plot_dir, f"mode_{mode_key[0]}_{mode_key[1]}_constellation_overlay.png")
             fig_overlay.savefig(overlay_path, dpi=600, bbox_inches="tight")
             saved_paths[f"constellation_overlay_mode_{mode_key}"] = overlay_path
             plt.close(fig_overlay)
@@ -849,7 +900,7 @@ class encodingRunner:
             ax_lin.set_ylabel("y [mm]")
             cbar_lin = fig_lin.colorbar(im_lin, ax=ax_lin, fraction=0.045, pad=0.04)
             cbar_lin.set_label("Intensity [a.u.]")
-            linear_path = os.path.join(summary_dir, f"mode_{mode_key[0]}_{mode_key[1]}_intensity.png")
+            linear_path = os.path.join(base_plot_dir, f"mode_{mode_key[0]}_{mode_key[1]}_intensity.png")
             fig_lin.savefig(linear_path, dpi=600, bbox_inches="tight")
             saved_paths[f"mode_{mode_key}_intensity"] = linear_path
             plt.close(fig_lin)
@@ -857,7 +908,7 @@ class encodingRunner:
         gc.collect()
 
         # Backward compatibility: optionally return original composite name pointing to summary directory
-        saved_paths["summary_dir"] = summary_dir
+        saved_paths["summary_dir"] = base_plot_dir
         return saved_paths
 
     def validate_transmitter(self, frame, snr_db=10, max_modes=4):

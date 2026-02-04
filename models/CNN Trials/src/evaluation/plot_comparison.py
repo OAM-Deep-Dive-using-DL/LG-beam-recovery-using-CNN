@@ -3,55 +3,95 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from pathlib import Path
 
+# Use relative path resolution
+SCRIPT_DIR = Path(__file__).parent.parent.parent  # models/CNN Trials/
+
 def plot_comparison():
-    # Load New Results (CBAM)
-    try:
-        data_cbam = np.load("cnn_results.npz")
-        cbam_cn2 = data_cbam['cn2']
-        cbam_ber = data_cbam['ber']
-    except FileNotFoundError:
-        print("Error: cnn_results.npz (CBAM) not found.")
-        return
+    import json
 
-    # Load Old Results (Vanilla)
-    vanilla_path = Path("models/CNN Trials/outputs/final_results/cnn_results.npz")
-    if vanilla_path.exists():
-        data_vanilla = np.load(vanilla_path)
-        vanilla_cn2 = data_vanilla['cn2']
-        vanilla_ber = data_vanilla['ber']
+    # 1. Load Real MMSE Results
+    mmse_json_path = SCRIPT_DIR.parent.parent / "LDPC + Pilot + MMSE trials" / "cn2_sweep_results" / "cn2_sweep_data.json"
+    if mmse_json_path.exists():
+        with open(mmse_json_path, 'r') as f:
+            mmse_data = json.load(f)
+        
+        # Extract MMSE data points
+        mmse_raw_cn2 = []
+        mmse_raw_ber = []
+        for entry in mmse_data['data']['mmse']:
+            mmse_raw_cn2.append(entry['cn2'])
+            mmse_raw_ber.append(entry['ber'])
+        
+        mmse_points_cn2 = np.array(mmse_raw_cn2)
+        mmse_points_ber = np.array(mmse_raw_ber)
+        print(f"Loaded Real MMSE data from {mmse_json_path}")
     else:
-        print("Warning: Vanilla results not found. Plotting CBAM only.")
-        vanilla_cn2 = None
-        vanilla_ber = None
+        print(f"Warning: MMSE data not found at {mmse_json_path}. Using synthetic baseline.")
+        # Fallback to synthetic points
+        mmse_points_cn2 = np.array([1e-18, 5e-17, 1e-16, 2e-16, 5e-16, 1e-15, 2e-15, 5e-15, 1e-14, 1e-12])
+        mmse_points_ber = np.array([0.000, 0.000, 0.009, 0.040, 0.150, 0.280, 0.350, 0.450, 0.490, 0.510])
 
-    # Define MMSE Baseline Points (Observed from Logs)
-    mmse_points_cn2 = np.array([1e-18, 5e-17, 1e-16, 2e-16, 5e-16, 1e-15, 2e-15, 5e-15, 1e-14, 1e-12])
-    mmse_points_ber = np.array([0.000, 0.000, 0.009, 0.040, 0.150, 0.280, 0.350, 0.450, 0.490, 0.510])
+    # 2. Load ResNet (Baseline DL)
+    # Search for ResNet result file
+    resnet_files = list(Path(__file__).parent.parent.parent.glob("**/cnn_results_resnet*.npz"))
+    # Or generically cnn_results.npz if it exists and looks like the old one
+    resnet_path = "cnn_results.npz" 
     
-    # Interpolate MMSE for smooth curve
+    if Path("cnn_results_resnet_cbam.npz").exists():
+        resnet_path = "cnn_results_resnet_cbam.npz"
+    elif len(resnet_files) > 0:
+        resnet_path = resnet_files[0]
+        
+    resnet_cn2 = None
+    resnet_ber = None
+    
+    if Path(resnet_path).exists():
+        try:
+            data_resnet = np.load(resnet_path)
+            resnet_cn2 = data_resnet['cn2']
+            resnet_ber = data_resnet['ber']
+            print(f"Loaded ResNet baseline from {resnet_path}")
+        except:
+            print(f"Could not load ResNet data from {resnet_path}")
+    
+    # 3. Load ConvNeXt (Ours)
+    convnext_path = "cnn_results_convnext_tiny.npz"
+    convnext_cn2 = None
+    convnext_ber = None
+    
+    if Path(convnext_path).exists():
+        data_convnext = np.load(convnext_path)
+        convnext_cn2 = data_convnext['cn2']
+        convnext_ber = data_convnext['ber']
+        print(f"Loaded ConvNeXt results from {convnext_path}")
+
+    
+    # Interpolate MMSE for smooth curve plotting
     f_mmse = interp1d(np.log10(mmse_points_cn2), mmse_points_ber, kind='linear', fill_value="extrapolate")
-    mmse_cn2_smooth = np.logspace(np.log10(1e-18), np.log10(1e-12), 100)
+    mmse_cn2_smooth = np.logspace(np.log10(min(mmse_points_cn2)), np.log10(max(mmse_points_cn2)), 100)
     mmse_ber_smooth = f_mmse(np.log10(mmse_cn2_smooth))
     mmse_ber_smooth = np.clip(mmse_ber_smooth, 0, 0.5)
 
     # Plot
     plt.figure(figsize=(10, 6))
     
-    # 1. MMSE
+    # Plot MMSE (Smooth + Points)
     plt.semilogx(mmse_cn2_smooth, mmse_ber_smooth, 'k--', linewidth=2, label='Classical MMSE', alpha=0.6)
+    plt.semilogx(mmse_points_cn2, mmse_points_ber, 'kx', markersize=5, alpha=0.4) # Raw points
     
-    # 2. Vanilla ResNet
-    if vanilla_cn2 is not None:
-        plt.semilogx(vanilla_cn2, vanilla_ber, 'b-o', linewidth=2, label='DL (ResNet-18)', markersize=6, alpha=0.7)
+    # Plot ResNet
+    if resnet_cn2 is not None:
+         plt.semilogx(resnet_cn2, resnet_ber, 'b-o', linewidth=2, label='ResNet + CBAM', markersize=6, alpha=0.7)
         
-    # 3. CBAM ResNet
-    plt.semilogx(cbam_cn2, cbam_ber, 'r-s', linewidth=3, label='DL (ResNet-18 + CBAM)', markersize=7)
+    # Plot ConvNeXt
+    if convnext_cn2 is not None:
+        plt.semilogx(convnext_cn2, convnext_ber, 'r-s', linewidth=3, label='ConvNeXt Tiny (Ours)', markersize=7)
 
     # Formatting
     plt.grid(True, which="both", ls="-", alpha=0.4)
     plt.xlabel('Turbulence Strength ($C_n^2$) [$m^{-2/3}$]', fontsize=12)
     plt.ylabel('Bit Error Rate (BER)', fontsize=12)
-    plt.title('Performance Comparison: Architecture Evolution', fontsize=14)
+    plt.title('Performance Comparison: MMSE vs Deep Learning', fontsize=14)
     plt.legend(fontsize=11)
     
     # Annotations
@@ -70,7 +110,7 @@ def plot_comparison():
     
     # FEC Limit
     plt.axhline(0.2, color='red', linestyle=':', linewidth=1)
-    plt.text(1e-18, 0.21, 'Soft-Dedocing FEC Limit (~20%)', color='red', fontsize=8)
+    plt.text(1e-18, 0.21, 'Soft-Decoding FEC Limit (~20%)', color='red', fontsize=8)
 
     plt.ylim(0, 0.55)
     plt.xlim(1e-18, 1e-12)

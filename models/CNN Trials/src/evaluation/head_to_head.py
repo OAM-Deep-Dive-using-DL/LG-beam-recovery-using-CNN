@@ -4,13 +4,11 @@ import sys
 import os
 from pathlib import Path
 
-# Add paths
-sys.path.append(os.path.abspath("models/CNN Trials/src"))
-sys.path.append(os.path.abspath("models/CNN Trials/src/models"))
-
-# Import Physics
-sys.path.append(os.path.abspath("models/CNN Trials/physics"))
-# Also need project root in path for pipeline to find receiver? No, pipeline is in physics.
+# Fixed: Use relative path resolution instead of hardcoded absolute paths
+SCRIPT_DIR = Path(__file__).parent.parent.parent  # models/CNN Trials/
+sys.path.insert(0, str(SCRIPT_DIR / "src"))
+sys.path.insert(0, str(SCRIPT_DIR / "src" / "models"))
+sys.path.insert(0, str(SCRIPT_DIR / "physics"))
 from pipeline import run_e2e_simulation, SimulationConfig
 
 # Create a config similar to GenConfig
@@ -29,13 +27,24 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load Pre-trained CNN
-model = MultiHeadResNet(n_modes=8).to(device)
-try:
-    model.load_state_dict(torch.load("best_model.pth", map_location=device))
-    print("Loaded CNN model.")
-except:
-    print("Error: best_model.pth not found!")
-    sys.exit(1)
+model = MultiHeadResNet(n_modes=8, backbone_name='resnet18_cbam').to(device)
+
+# Try backbone-specific model first, fallback to generic
+backbone = 'resnet18_cbam'  # Updated to match training
+model_path = f"best_model_{backbone}.pth"
+
+if not Path(model_path).exists():
+    # Try fallback without backbone suffix
+    model_path = "best_model.pth"
+    if not Path(model_path).exists():
+        print(f"Error: Model not found!")
+        print(f"Expected: best_model_{backbone}.pth or best_model.pth")
+        print(f"Run training first: cd ../training && python train.py")
+        sys.exit(1)
+
+print(f"Loading model from {model_path}...")
+model.load_state_dict(torch.load(model_path, map_location=device))
+print("✓ CNN model loaded.")
 model.eval()
 
 def qpsk_ber(preds, targets):
@@ -47,6 +56,41 @@ def qpsk_ber(preds, targets):
     p_im = np.sign(np.imag(preds))
     errors = (t_re != p_re).astype(int) + (t_im != p_im).astype(int)
     return np.sum(errors) / (len(targets) * 2)
+
+def _zoom_to_aperture(intensity, grid_info, receiver_diameter):
+    """
+    Smart Zoom: Crop intensity field to receiver aperture before downsampling.
+    
+    This matches the canonical generator's preprocessing and dramatically
+    improves effective resolution by removing empty space around the beam.
+    
+    Args:
+        intensity: [N, N] intensity field
+        grid_info: Dict with 'D', 'delta', 'N' from simulation
+        receiver_diameter: Receiver aperture diameter (m)
+    
+    Returns:
+        intensity_cropped: [N_crop, N_crop] cropped intensity
+    """
+    # Find grid indices corresponding to receiver aperture
+    D_rx = receiver_diameter
+    delta = grid_info['delta']
+    
+    # Calculate how many pixels correspond to the aperture
+    # Need to be conservative and round outward
+    half_pixels = int(np.ceil(D_rx / (2 * delta)))
+    center_idx = grid_info['N'] // 2
+    
+    # Extract indices
+    i_min = max(0, center_idx - half_pixels)
+    i_max = min(grid_info['N'], center_idx + half_pixels)
+    j_min = max(0, center_idx - half_pixels)
+    j_max = min(grid_info['N'], center_idx + half_pixels)
+    
+    # Crop
+    intensity_cropped = intensity[i_min:i_max, j_min:j_max]
+    
+    return intensity_cropped
 
 def eval_point(cn2_val, n_frames=2):
     LiveConfig.CN2 = cn2_val
@@ -80,8 +124,9 @@ def eval_point(cn2_val, n_frames=2):
         mmse_ber_accum += mmse_ber_raw
         
         # 2. Run CNN
-        rx_sequence = sim_res['E_rx_sequence'] # [205, Nx, Ny] complex
+        rx_sequence = sim_res['E_rx_sequence'] # [N_symbols, Nx, Ny] complex
         tx_signals = sim_res['tx_signals']     # dict of symbols
+        grid_info = sim_res['grid_info']       # CRITICAL: Grid metadata for smart zoom
         
         # Prepare Batch
         # Resize to 64x64
@@ -101,16 +146,36 @@ def eval_point(cn2_val, n_frames=2):
         # Collect Inputs
         batch_imgs = np.zeros((n_syms, 1, 64, 64), dtype=np.float32)
         
+        # FIXED: Smart zoom preprocessing matching canonical generator
+        # This dramatically improves CNN performance by increasing effective resolution
+        from scipy.ndimage import zoom
+        
         for t in range(n_syms):
             field = rx_sequence[t]
-            # Calculate Intensity
+            
+            # Step 1: Calculate Intensity
             intensity = np.abs(field)**2
-            # Resize
-            # Original grid is 256x256. Target 64x64. Factor 0.25.
-            # Zoom is cleaner
-            img_small = zoom(intensity, 0.25, order=1)
-            # Normalize
-            img_small = img_small / (np.max(img_small) + 1e-8)
+            
+            # Step 2: Smart Zoom - Crop to receiver aperture BEFORE downsampling
+            # This matches the canonical generator's preprocessing
+            intensity_cropped = _zoom_to_aperture(
+                intensity, 
+                grid_info, 
+                LiveConfig.RECEIVER_DIAMETER
+            )
+            
+            # Step 3: Downsample to 64x64
+            N_cropped = intensity_cropped.shape[0]
+            scale_factor = 64 / N_cropped
+            img_small = zoom(intensity_cropped, scale_factor, order=1)
+            
+            # Step 4: Peak Normalize (matching canonical generator)
+            max_val = np.max(img_small)
+            if max_val > 0:
+                img_small = img_small / max_val
+            else:
+                img_small = img_small  # Avoid division by zero
+            
             batch_imgs[t, 0] = img_small
             
         # Infer CNN

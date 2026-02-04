@@ -263,15 +263,13 @@ def run_e2e_simulation(config):
          return None
          
     n_symbols = min(symbol_lengths)
-    # FIXED: Get pilot positions from tx_frame (PilotHandler doesn't have pilot_positions attribute)
-    # Pilot positions are stored per-mode in tx_signals[mode_key]["pilot_positions"]
-    first_mode = list(tx_signals.keys())[0]
-    pilot_pos = np.asarray(tx_signals[first_mode].get("pilot_positions", []), dtype=int)
-    if n_symbols < len(pilot_pos):
-        print(f"✗ ERROR: n_symbols={n_symbols} < pilots={len(pilot_pos)}. Increase N_INFO_BITS.")
-        return None
-    print(f"    (Simulation will truncate to minimum frame length: {n_symbols} symbols)")
-    print(f"    Pilot positions: {len(pilot_pos)} pilots per mode")
+    # Truncate to minimum length across modes
+    min_symbols = min(len(sig['frame']) for sig in tx_frame.tx_signals.values())
+    
+    n_symbols = min_symbols # APPLY TRUNCATION TO LOOP VARIABLE
+    
+    print(f"    (Simulation will truncate to minimum frame length: {min_symbols} symbols)")
+    print(f"    Pilot positions: {len(tx_frame.tx_signals[cfg.SPATIAL_MODES[0]]['pilot_positions'])} pilots per mode")
 
     # === 3. PHYSICAL CHANNEL ===
     print("\n" + "="*80)
@@ -396,6 +394,8 @@ def run_e2e_simulation(config):
     
     # Sample symbols for TX vis (average first 5 non-pilot or unit) – FIXED: Realistic avg
     sample_syms = np.ones(n_modes, dtype=complex)  # Fallback unit
+    first_mode = cfg.SPATIAL_MODES[0]
+    pilot_pos = tx_frame.tx_signals[first_mode]['pilot_positions']
     first_non_pilot = max(0, len(pilot_pos)) if len(pilot_pos) > 0 else 0
     if first_non_pilot < n_symbols:
         n_samples = min(5, n_symbols - first_non_pilot)
@@ -515,118 +515,91 @@ def plot_e2e_results(results, save_path=None):
     grid_info = results['grid_info']
     H_est = metrics['H_est']
     
-    fig = plt.figure(figsize=(10, 10))
-    gs = fig.add_gridspec(2, 3)
+    plt.rcParams['font.family'] = 'serif'
     
+    fig = plt.figure(figsize=(11, 10)) # Slightly wider for better aspect
+    gs = fig.add_gridspec(2, 2, hspace=0.25, wspace=0.25)
+    
+    # Global Title
     fig.suptitle(f"End-to-End FSO-OAM Simulation Results\n"
-                 f"Cn²={cfg.CN2:.1e}, L={cfg.DISTANCE}m, SNR={cfg.SNR_DB}dB, BER={metrics['ber']:.2e}",
-                 fontsize=18, fontweight='bold')
+                 f"$C_n^2$={cfg.CN2:.1e} $m^{{-2/3}}$, L={cfg.DISTANCE}m, SNR={cfg.SNR_DB}dB",
+                 fontsize=16, fontweight='bold', family='serif')
     
     extent_mm = grid_info['D'] * 1e3 / 2
     
-    # FIXED: TX vis as multiplexed
+    # 1. TX Field (Multiplexed)
     ax1 = fig.add_subplot(gs[0, 0])
     E_tx_vis = np.abs(results['E_tx_visualization'])**2
     im1 = ax1.imshow(E_tx_vis.T, 
                     extent=[-extent_mm, extent_mm, -extent_mm, extent_mm],
-                    cmap='hot', origin='lower')
-    ax1.set_title('TX Multiplexed Field Example', fontweight='bold')
-    ax1.set_xlabel('x [mm]')
-    ax1.set_ylabel('y [mm]')
-    plt.colorbar(im1, ax=ax1, label='Intensity [W/m²]')
+                    cmap='inferno', origin='lower') # 'inferno' often prints better than hot
+    ax1.set_title('(a) TX Multiplexed Intensity', fontweight='bold', fontsize=12)
+    ax1.set_xlabel('x [mm]', fontsize=11)
+    ax1.set_ylabel('y [mm]', fontsize=11)
+    cb1 = plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+    cb1.set_label('Intensity [$W/m^2$]', fontsize=10)
     
-    # Plot 2: Received field (example snapshot)
+    # 2. RX Field (Degraded)
     ax2 = fig.add_subplot(gs[1, 0])
     E_rx_vis = np.abs(results['E_rx_visualization'])**2
-    vmax = np.percentile(E_rx_vis, 99.9) # Clip hotspots for better viz
+    vmax = np.percentile(E_rx_vis, 99.9) 
     im2 = ax2.imshow(E_rx_vis.T, 
                     extent=[-extent_mm, extent_mm, -extent_mm, extent_mm],
-                    cmap='hot', origin='lower', vmax=vmax)
-    ax2.set_title(f'RX Field Snapshot (Symbol 0)', fontweight='bold')
-    ax2.set_xlabel('x [mm]')
-    ax2.set_ylabel('y [mm]')
-    plt.colorbar(im2, ax=ax2, label='Intensity [W/m²]')
+                    cmap='inferno', origin='lower', vmax=vmax)
+    ax2.set_title(f'(b) RX Field (Turbulence + Noise)', fontweight='bold', fontsize=12)
+    ax2.set_xlabel('x [mm]', fontsize=11)
+    ax2.set_ylabel('y [mm]', fontsize=11)
+    cb2 = plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    cb2.set_label('Intensity [$W/m^2$]', fontsize=10)
     
-    # Plot 3: Estimated Channel Matrix |H_est|
+    # 3. Channel Matrix Magnitude
     ax3 = fig.add_subplot(gs[0, 1])
+    # Log-scale magnitude can sometimes reveal crosstalk better, but linear is standard
     im3 = ax3.imshow(np.abs(H_est), cmap='viridis', interpolation='nearest')
-    ax3.set_title(r'Estimated Channel Matrix $|\hat{H}|$', fontweight='bold')
+    ax3.set_title(r'(c) Channel Magnitude $|\mathbf{H}|$', fontweight='bold', fontsize=12)
     
-    mode_labels = [f"({p},{l})" for p,l in cfg.SPATIAL_MODES]
+    mode_labels = [rf"($\ell$={l}, p={p})" for p,l in cfg.SPATIAL_MODES]
     ax3.set_xticks(np.arange(len(mode_labels)))
     ax3.set_yticks(np.arange(len(mode_labels)))
-    ax3.set_xticklabels(mode_labels, rotation=45, ha='right')
-    ax3.set_yticklabels(mode_labels)
-    ax3.set_xlabel('Transmitted Mode (j)')
-    ax3.set_ylabel('Received Mode (i)')
-    plt.colorbar(im3, ax=ax3, label='Magnitude (Coupling Strength)')
-    # Add text labels
+    ax3.set_xticklabels(mode_labels, rotation=45, ha='right', fontsize=9)
+    ax3.set_yticklabels(mode_labels, fontsize=9)
+    ax3.set_xlabel('TX Mode', fontsize=11)
+    ax3.set_ylabel('RX Mode', fontsize=11)
+    cb3 = plt.colorbar(im3, ax=ax3, fraction=0.046, pad=0.04)
+    cb3.set_label('Magnitude', fontsize=10)
+    
+    # Annotate significant couplings
+    threshold = 0.1 * np.max(np.abs(H_est))
     for i in range(H_est.shape[0]):
         for j in range(H_est.shape[1]):
-            ax3.text(j, i, f"{np.abs(H_est[i,j]):.2f}", 
-                     ha="center", va="center", color="w", fontsize=8)
+            val = np.abs(H_est[i,j])
+            color = 'black' if val > 0.6 * np.max(np.abs(H_est)) else 'white'
+            if val > threshold:
+                ax3.text(j, i, f"{val:.2f}", ha="center", va="center", color=color, fontsize=8, fontweight='bold')
             
-    # Plot 4: Channel Matrix Phase
+    # 4. Channel Matrix Phase
     ax4 = fig.add_subplot(gs[1, 1])
-    im4 = ax4.imshow(np.angle(H_est), cmap='hsv', interpolation='nearest', vmin=-np.pi, vmax=np.pi)
-    ax4.set_title(r'Estimated Channel Matrix Phase $\angle \hat{H}$', fontweight='bold')
+    im4 = ax4.imshow(np.angle(H_est), cmap='twilight', interpolation='nearest', vmin=-np.pi, vmax=np.pi)
+    ax4.set_title(r'(d) Channel Phase $\angle \mathbf{H}$', fontweight='bold', fontsize=12)
     ax4.set_xticks(np.arange(len(mode_labels)))
     ax4.set_yticks(np.arange(len(mode_labels)))
-    ax4.set_xticklabels(mode_labels, rotation=45, ha='right')
-    ax4.set_yticklabels(mode_labels)
-    ax4.set_xlabel('Transmitted Mode (j)')
-    ax4.set_ylabel('Received Mode (i)')
-    plt.colorbar(im4, ax=ax4, label='Phase (rad)')
+    ax4.set_xticklabels(mode_labels, rotation=45, ha='right', fontsize=9)
+    ax4.set_yticklabels(mode_labels, fontsize=9)
+    ax4.set_xlabel('TX Mode', fontsize=11)
+    ax4.set_ylabel('RX Mode', fontsize=11)
+    cb4 = plt.colorbar(im4, ax=ax4, fraction=0.046, pad=0.04, ticks=[-np.pi, 0, np.pi])
+    cb4.ax.set_yticklabels([r'$-\pi$', '0', r'$\pi$'])
     
-    # Plot 5: Performance Metrics Text
-#     ax5 = fig.add_subplot(gs[:, 2])
-#     ax5.axis('off')
-    
-#     # Get turbulence properties
-#     temp_turb = AtmosphericTurbulence(
-#         Cn2=cfg.CN2, L0=cfg.L0, l0=cfg.L0_INNER, wavelength=cfg.WAVELENGTH
-#     )
-    
-#     metrics_text = f"""
-# SYSTEM PERFORMANCE METRICS
+    # Stats Overlay
+    stats_text = (f"BER: {metrics['ber']:.2e}\n"
+                  f"Cond(H): {np.linalg.cond(H_est):.1f}")
+    ax4.text(1.3, -0.2, stats_text, transform=ax4.transAxes, ha='right', va='top', 
+             fontsize=10, family='monospace', bbox=dict(facecolor='white', alpha=0.8, edgecolor='gray'))
 
-# [Link Parameters]
-#   Distance: {cfg.DISTANCE} m
-#   Weather: {cfg.WEATHER}
-#   Turbulence: Cn² = {cfg.CN2:.2e}
-#   SNR: {cfg.SNR_DB} dB
-#   Modes: {len(cfg.SPATIAL_MODES)} ( {', '.join(mode_labels)} )
-
-# [Channel Metrics]
-#   Rytov Variance: {temp_turb.rytov_variance(cfg.DISTANCE):.3f}
-#   Fried Parameter (r0): {temp_turb.fried_parameter(cfg.DISTANCE)*1000:.2f} mm
-#   Channel Condition: {np.linalg.cond(H_est):.2f}
-  
-# [Receiver Metrics]
-#   Equalization: {cfg.EQ_METHOD.upper()}
-#   Est. Noise Var: {metrics['noise_var']:.2e}
-
-# [FINAL PERFORMANCE]
-#   Total Info Bits: {metrics['total_bits']}
-#   Bit Errors: {metrics['bit_errors']}
-#   ---------------------------------
-#   Bit Error Rate (BER): {metrics['ber']:.4e}
-#   ---------------------------------
-#     """
-    
-#     ax5.text(0.0, 0.95, metrics_text, transform=ax5.transAxes,
-#             fontsize=12, verticalalignment='top', fontfamily='monospace',
-#             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-
-#     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    
-#     if save_path:
-#         # Ensure the directory exists before trying to save the file
-#         plot_directory = os.path.dirname(save_path)
-#         os.makedirs(plot_directory, exist_ok=True)
-        
-#         plt.savefig(save_path, dpi=cfg.DPI, bbox_inches='tight')
-#         print(f"\n✓ E2E Results plot saved to: {save_path}")
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=cfg.DPI, bbox_inches='tight')
+        print(f"✓ E2E Results plot saved to: {save_path}")
     
     return fig
 

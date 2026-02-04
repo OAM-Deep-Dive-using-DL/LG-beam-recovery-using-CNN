@@ -137,10 +137,12 @@ class OAMDemultiplexer:
         
         # CRITICAL: Clear cache if scaling factors are present (to ensure fresh fields with correct scaling)
         # This prevents using cached fields from previous runs with different scaling
-        if tx_frame is not None and hasattr(tx_frame, 'metadata') and tx_frame.metadata is not None:
-            if 'basis_scaling_factors' in tx_frame.metadata:
-                # Clear cache to force regeneration with new scaling factors
-                self._ref_cache.clear()
+        # OPTIMIZATION: Cache clearing removed. 
+        # 'scaling_factor' is now part of the cache key (see _make_ref_key / ref_field), 
+        # so we can safely reuse cached fields even if scaling factors change across runs.
+        # if tx_frame is not None and hasattr(tx_frame, 'metadata') and tx_frame.metadata is not None:
+        #     if 'basis_scaling_factors' in tx_frame.metadata:
+        #         self._ref_cache.clear()
 
         if not np.iscomplexobj(E_rx):
             warnings.warn("E_rx appears to be real (intensity). Assuming sqrt(I) zero-phase field for projection.")

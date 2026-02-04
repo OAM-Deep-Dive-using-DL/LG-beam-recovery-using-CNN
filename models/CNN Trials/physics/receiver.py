@@ -320,8 +320,8 @@ class ChannelEstimator:
         """
         Estimate noise variance for MMSE equalization.
         
-        CRITICAL FIX: Use true noise variance from metadata instead of biased residual estimate.
-        The residual-based method (Y_p - H_est @ P_p) includes:
+        CRITICAL: Use true noise variance from metadata for fair head-to-head comparisons.
+        The residual-based method (Y_p - H_est @ P_p) is biased because it includes:
         - Channel estimation error
         - Turbulence effects not captured by LS estimate  
         - Actual noise
@@ -332,29 +332,26 @@ class ChannelEstimator:
         # Check if noise is disabled in metadata
         if hasattr(tx_frame, 'metadata') and tx_frame.metadata is not None:
             noise_disabled = tx_frame.metadata.get('noise_disabled', False)
-            print(f"   [DEBUG] noise_disabled flag found: {noise_disabled}")  # DEBUG
             if noise_disabled:
                 # Use tiny epsilon for ZF-like behavior (prevents over-regularization)
                 self.noise_var_est = 1e-6
-                print(f"   [DEBUG] Noise disabled → forcing noise_var = 1e-6 (ZF-like)")  # DEBUG
+                print(f"    Noise disabled → using σ² = {self.noise_var_est:.3e} (ZF-like)")
                 return self.noise_var_est
             
-            # CRITICAL FIX: Use true noise variance from metadata
-            # if 'noise_var_per_pixel' in tx_frame.metadata:
-            #     noise_var_per_pixel = tx_frame.metadata['noise_var_per_pixel']
-            #     # Convert per-pixel variance to per-symbol variance
-            #     # The projection sums over pixels, so variance scales with number of pixels
-            #     # But we want the noise variance in the symbol domain after projection
-            #     # For now, use the per-pixel value as a conservative estimate
-            #     self.noise_var_est = max(noise_var_per_pixel, 1e-12)
-            #     snr_db = tx_frame.metadata.get('snr_db', 'unknown')
-            #     print(f"   [DEBUG] Using true noise_var from metadata: {self.noise_var_est:.3e} (SNR={snr_db}dB)")
-            #     return self.noise_var_est
-        else:
-            print(f"   [DEBUG] No metadata or noise_disabled flag not found")  # DEBUG
+            # CRITICAL: Use true noise variance from metadata
+            if 'noise_var_per_pixel' in tx_frame.metadata:
+                noise_var_per_pixel = tx_frame.metadata['noise_var_per_pixel']
+                # Convert per-pixel variance to per-symbol variance
+                # The projection sums over pixels, so variance scales with number of pixels
+                # But we want the noise variance in the symbol domain after projection
+                # For now, use the per-pixel value as a conservative estimate
+                self.noise_var_est = max(noise_var_per_pixel, 1e-12)
+                snr_db = tx_frame.metadata.get('snr_db', 'unknown')
+                print(f"    Using true σ² from metadata: {self.noise_var_est:.3e} (SNR={snr_db}dB)")
+                return self.noise_var_est
         
         # Fallback: estimate from pilot residuals (biased, but better than nothing)
-        print(f"   [DEBUG] WARNING: No noise_var in metadata, falling back to residual estimate (biased!)")
+        print(f"    WARNING: No noise_var in metadata, using residual estimate (biased!)")
         Y_p, P_p, pilot_pos = self._gather_pilots(rx_symbols_per_mode, tx_frame)
         if Y_p is None or P_p is None or P_p.size == 0:
             self.noise_var_est = 1e-6
@@ -362,7 +359,7 @@ class ChannelEstimator:
         residual = Y_p - H_est @ P_p
         noise_var = np.mean(np.abs(residual) ** 2)
         self.noise_var_est = max(noise_var, 1e-12)
-        print(f"   [DEBUG] Estimated noise_var from residuals (BIASED): {noise_var:.3e}")  # DEBUG
+        print(f"    Estimated σ² from residuals (BIASED): {noise_var:.3e}")
         return self.noise_var_est
 
 

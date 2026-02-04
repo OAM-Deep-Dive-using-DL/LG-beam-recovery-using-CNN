@@ -108,11 +108,11 @@ def generate_phase_screen(r0, N, delta, L0=10.0, l0=0.005):
 class AtmosphericTurbulence:
     """
     Computes turbulence parameters for LG beams.
-    - Process: C_n²(z) → integrated for r0, σ_R²; OAM/M² corrections (mode sensitivity).
+    - Process: C_n²(z) → integrated for r0, σ_R².
     - r0: Coherence diameter; small r0 → speckles, OAM crosstalk ∝ (D/r0)^{5/3}.
     - σ_R²: Rytov var (weak turb log-amp); >1 → saturation (gamma-gamma).
-    - For LG: OAM factor (1+|l|) (project-specific, Wang 2012); M² scaling σ_I² ~ M^{7/6} (Gbur 2008).
-      Both factors are applied multiplicatively in rytov_variance().
+    - OAM/M² sensitivity is characterized numerically via split-step (mode overlap,
+      intensity correlation) rather than through heuristic scaling in σ_R².
     """
     def __init__(self, Cn2=1e-14, L0=10.0, l0=0.005, wavelength=1550e-9, w0=None, beam=None):
         self.Cn2 = float(Cn2)  # Uniform/ground; profiles via cn2_profile
@@ -146,40 +146,27 @@ class AtmosphericTurbulence:
 
     def rytov_variance(self, distance, beam_type="plane"):
         """
-        Long-term Rytov σ_R² (Andrews & Phillips 2005, Eq. 9.48); beam/OAM/M² corrected.
-        
-        Corrections applied:
-        1. OAM factor (1+|l|): Project-specific approximation for orbital angular momentum
-           perturbations (Wang et al., Nat. Photon. 2012). Accounts for increased sensitivity
-           of higher-order OAM modes to turbulence-induced phase distortions.
-        2. M² factor (M²^{7/6}): Beam quality scaling for intensity variance (Gbur 2008).
-           Separate from OAM factor; accounts for beam divergence effects on turbulence response.
-           M² = 2p + |l| + 1 for LG_{p,l} modes (Siegman 1986).
-        3. Gaussian beam reduction: Andrews & Phillips (2005) Eq. 11.32 for collimated beams.
+        Long-term Rytov σ_R² (Andrews & Phillips 2005, Eq. 9.48).
+
+        NOTE: OAM and M²-specific scaling has been disabled here so that
+        σ_R² reflects the canonical plane/spherical/Gaussian values.
+        Use the split-step simulation (phase screens) to study OAM/M²
+        sensitivity numerically.
         """
         sigma_plane = 1.23 * self.Cn2 * (self.k ** (7.0 / 6.0)) * (distance ** (11.0 / 6.0))
-        
-        # OAM factor: project-specific approximation (1+|l|)
-        # Note: This is not standard literature but a reasonable approximation for OAM mode
-        # sensitivity to turbulence. Documented as project-specific enhancement.
-        oam_factor = 1.0 + self.beam_order  # OAM boost (Wang Nat. Photon. 2012)
-        
-        # M² factor: beam quality scaling for intensity variance (Gbur 2008)
-        # M² effect is separate from OAM factor and should be included for accurate modeling
-        m2_factor = self.M2 ** (7.0 / 6.0)  # Intensity variance scaling with beam quality
-        
+
         if beam_type == "plane":
-            return sigma_plane * oam_factor * m2_factor
+            return sigma_plane
         elif beam_type == "spherical":
-            return 0.5 * sigma_plane * oam_factor * m2_factor
+            return 0.5 * sigma_plane
         elif beam_type in ("gaussian", "collimated"):
             if self.w0 is None:
-                return sigma_plane * oam_factor * m2_factor
-            # Beam reduction (Andrews & Phillips 2005, Eq. 11.32)
+                return sigma_plane
+            # Beam reduction (Andrews & Phillips 2005, Eq. 11.32) for collimated Gaussian beam
             Lambda = distance / (self.k * self.w0 ** 2 / 2.0)
             Q = max(1.0, 1.0 + (self.k * self.w0 ** 2 / distance))
             reduction = 1.0 / (1.0 + 1.63 * Lambda ** (6.0 / 5.0) * sigma_plane ** (6.0 / 5.0))
-            return sigma_plane * oam_factor * m2_factor * reduction
+            return sigma_plane * reduction
         else:
             raise ValueError(f"Unknown beam_type: {beam_type}")
 
@@ -386,9 +373,8 @@ def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling
     """
     Ensemble (3 runs): LG degradation metrics.
     - Strehl S: max(I_t)/max(I_p) (phase-aberr ≈ exp(-σ_φ²); OAM low for high |l|/tilt).
-    - σ_I²: Var(I)/<I>² (ROI >1/e² I_p); weak ≈4 σ_R², OAM ~(1+|l|), M² scaling ~M²^{7/6}.
-    - For LG: |l| high → scint up (momentum transfer).
-    - Fix: Pre-compute sigma_print for valid f-string.
+    - σ_I²: Var(I)/<I>² (ROI >1/e² I_p); weak ≈4 σ_R².
+    - Mode overlap and intensity correlation are computed numerically from split-step fields.
     """
     D = oversampling * 6.0 * beam.beam_waist(total_distance)
     delta = D / N
@@ -401,46 +387,78 @@ def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling
 
     strehls = []
     scintillations = []
+    overlaps = []
+    intensity_correlations = []
     print(f"  Ensemble analysis ({num_ensembles} realizations, N={N}, δ={delta*1000:.2f}mm):")
     for ens in range(num_ensembles):
         result = apply_multi_layer_turbulence(initial_field, beam, layers, total_distance,
                                               N=N, oversampling=oversampling, L0=L0, l0=l0)
-        final_I = np.abs(result['final_field'])**2
-        pristine_I = np.abs(result['pristine_field'])**2
+        final_field = result['final_field']
+        pristine_field = result['pristine_field']
+        final_I = np.abs(final_field)**2
+        pristine_I = np.abs(pristine_field)**2
         if np.isnan(final_I).any() or np.sum(final_I) == 0:
             print(f"    Ens {ens+1}: Invalid (NaN/spread); skip")
             continue
         # Strehl
         strehl = min(1.0, np.max(final_I) / np.max(pristine_I))
         strehls.append(strehl)
-        # Scint (default np.nan)
+        # Scintillation and intensity correlation in ROI
         sigma_i2 = np.nan
         roi_mask = pristine_I > (np.max(pristine_I) / np.e**2)
         if np.sum(roi_mask) > 0:
             I_roi = final_I[roi_mask]
+            pristine_roi = pristine_I[roi_mask]
             mean_I = np.mean(I_roi)
             sigma_i2 = np.var(I_roi) / (mean_I**2 + 1e-12)
             scintillations.append(sigma_i2)
+            # Intensity correlation within ROI (shape distortion metric)
+            if I_roi.size > 1:
+                I_vec = I_roi.ravel().astype(float)
+                P_vec = pristine_roi.ravel().astype(float)
+                I_vec = I_vec - np.mean(I_vec)
+                P_vec = P_vec - np.mean(P_vec)
+                denom_corr = np.sqrt(np.sum(I_vec**2) * np.sum(P_vec**2)) + 1e-12
+                corr = float(np.sum(I_vec * P_vec) / denom_corr)
+            else:
+                corr = np.nan
+            intensity_correlations.append(corr)
+        else:
+            intensity_correlations.append(np.nan)
+        # Mode overlap (field inner-product based)
+        num_ip = np.vdot(pristine_field, final_field)
+        denom_ip = np.sqrt(np.sum(np.abs(pristine_field)**2) * np.sum(np.abs(final_field)**2)) + 1e-12
+        overlap_val = float((np.abs(num_ip)**2) / (denom_ip**2 + 1e-24))
+        overlaps.append(overlap_val)
+
         # Fixed print: Pre-compute for conditional
         sigma_print = f"{sigma_i2:.3f}" if not np.isnan(sigma_i2) else 'N/A'
         print(f"    Ens {ens+1}: Strehl={strehl:.3f}, σ_I²={sigma_print}")
 
     strehl_mean = np.mean(strehls) if strehls else 0.0
     scint_mean = np.nanmean(scintillations) if scintillations else np.nan
+    overlap_mean = np.nanmean(overlaps) if overlaps else np.nan
+    int_corr_mean = np.nanmean(intensity_correlations) if intensity_correlations else np.nan
     if verbose:
         scint_print = f"{scint_mean:.3f}" if not np.isnan(scint_mean) else 'N/A'
+        overlap_print = f"{overlap_mean:.3f}" if not np.isnan(overlap_mean) else 'N/A'
+        corr_print = f"{int_corr_mean:.3f}" if not np.isnan(int_corr_mean) else 'N/A'
         print(f"  Avg: Strehl={strehl_mean:.3f} ±{np.std(strehls):.3f}, σ_I²={scint_print} ±{np.nanstd(scintillations):.3f}")
+        print(f"       Mode-overlap≈{overlap_print}, Intensity-corr≈{corr_print}")
         if len(scintillations) < num_ensembles:
             print("  Note: Some ensembles lost ROI (strong spreading)")
-    return {'strehl_mean': strehl_mean, 'scint_mean': scint_mean}, result
+    return {'strehl_mean': strehl_mean,
+            'scint_mean': scint_mean,
+            'overlap_mean': overlap_mean,
+            'intensity_corr_mean': int_corr_mean}, result
 
 
 
 def validate_turbulence_implementation():
     """
     Validates processes (Andrews 2005; Schmidt 2010).
-    - PSD var; Rytov (OAM/M²); r0 scale; layer add (∑ 1/r0^{5/3} = 1/r0_tot^{5/3}).
-    - LG: OAM factor (1+|l|) and M²^{7/6} both applied multiplicatively in Rytov variance.
+    - PSD var; Rytov (canonical); r0 scale; layer add (∑ 1/r0^{5/3} = 1/r0_tot^{5/3}).
+    - OAM/M² sensitivity is studied numerically via split-step, not via Rytov multipliers.
     """
     print("\n--- Turbulence Validation Suite (Literature Checks) ---")
     WAVELENGTH = 1550e-9
@@ -464,8 +482,8 @@ def validate_turbulence_implementation():
     print(f"  Actual: {actual_var:.3e}, Kolmogorov: {kolmogorov_var:.3e}, Ratio: {ratio:.3f} [{'✓' if passed1 else '✗'}]")
     all_passed = all_passed and passed1
 
-    # [2] Rytov (1km weak ~0.1; OAM l=2 → x3, M²=3 → x3.66, combined ~11x boost, gauss red ~0.5)
-    print("\n[TEST 2] Rytov Variance (OAM/M² Corrected)")
+    # [2] Rytov (1km weak ~0.1; canonical expressions)
+    print("\n[TEST 2] Rytov Variance (Canonical Formulas)")
     DIST_TEST = 1000
     if LaguerreGaussianBeam:
         beam_test = LaguerreGaussianBeam(0, 2, WAVELENGTH, W0)
@@ -477,9 +495,7 @@ def validate_turbulence_implementation():
         passed_sph = 0.95 < ratio_sph < 1.05
         reduction_gauss = sigma_gauss / sigma_plane
         passed_gauss = 0.3 < reduction_gauss < 0.8
-        oam_factor = 1 + abs(beam_test.l)
-        m2_factor = beam_test.M_squared ** (7.0 / 6.0)
-        print(f"  Plane (OAM |l|={abs(beam_test.l)} → x{oam_factor:.1f}, M²={beam_test.M_squared:.1f} → x{m2_factor:.2f}): {sigma_plane:.3f}")
+        print(f"  Plane (canonical): {sigma_plane:.3f}")
         print(f"  Sph (0.5x): {sigma_sph:.3f} (ratio {ratio_sph:.3f} [{'✓' if passed_sph else '✗'}])")
         print(f"  Gauss (with beam reduction): {sigma_gauss:.3f} (red {reduction_gauss:.2f} [{'✓' if passed_gauss else '✗'}])")
         all_passed = all_passed and passed_sph and passed_gauss
@@ -655,6 +671,149 @@ def plot_multi_layer_effects(beam, num_screens_list, distance, ground_Cn2, L0, l
         plt.savefig(save_path, dpi=1200, bbox_inches="tight")
         print(f"  Saved visualization: {save_path}")
     return fig
+
+
+def measure_scintillation_for_modes(
+    modes_list,
+    Cn2,
+    distance,
+    wavelength,
+    w0,
+    L0=10.0,
+    l0=0.005,
+    num_screens=25,
+    N=256,
+    oversampling=1,
+    num_ensembles=3,
+    cn2_model="uniform",
+    verbose=True
+):
+    """
+    Measure scintillation index σ_I² for each OAM mode in modes_list.
+    
+    Args:
+        modes_list: List of (p, l) tuples for LG modes
+        Cn2: Ground-level Cn² [m^(-2/3)]
+        distance: Propagation distance [m]
+        wavelength: Optical wavelength [m]
+        w0: Beam waist at TX [m]
+        L0: Outer scale [m]
+        l0: Inner scale [m]
+        num_screens: Number of phase screens
+        N: Grid size
+        oversampling: Oversampling factor for grid
+        num_ensembles: Number of ensemble runs per mode
+        cn2_model: Turbulence profile model
+        verbose: Print per-mode results
+    
+    Returns:
+        dict: {(p,l): {'scint_mean': float, 'strehl_mean': float, 
+                       'overlap_mean': float, 'intensity_corr_mean': float}, ...}
+    """
+    if LaguerreGaussianBeam is None:
+        raise ImportError("lgBeam.py required for measure_scintillation_for_modes")
+    
+    results = {}
+    
+    for p, l in modes_list:
+        beam = LaguerreGaussianBeam(p, l, wavelength, w0)
+        layers = create_multi_layer_screens(
+            distance, num_screens, wavelength, Cn2, L0, l0, cn2_model, verbose=False
+        )
+        
+        stats, _ = analyze_turbulence_effects(
+            beam, layers, distance, N=N, oversampling=oversampling,
+            L0=L0, l0=l0, num_ensembles=num_ensembles, verbose=False
+        )
+        
+        results[(p, l)] = {
+            'scint_mean': stats['scint_mean'],
+            'strehl_mean': stats['strehl_mean'],
+            'overlap_mean': stats['overlap_mean'],
+            'intensity_corr_mean': stats['intensity_corr_mean']
+        }
+        
+        if verbose:
+            print(f"  LG({p},{l:+d}): σ_I²={stats['scint_mean']:.3f}, "
+                  f"S={stats['strehl_mean']:.3f}, "
+                  f"η={stats['overlap_mean']:.3f}, "
+                  f"ρ_I={stats['intensity_corr_mean']:.3f}")
+    
+    return results
+
+
+def sweep_cn2_for_modes(
+    modes_list,
+    cn2_values,
+    distance,
+    wavelength,
+    w0,
+    L0=10.0,
+    l0=0.005,
+    num_screens=25,
+    N=256,
+    oversampling=1,
+    num_ensembles=3,
+    cn2_model="uniform",
+    verbose=True
+):
+    """
+    Sweep Cn² values and measure scintillation metrics for multiple OAM modes.
+    
+    Args:
+        modes_list: List of (p, l) tuples for LG modes
+        cn2_values: Array or list of Cn² values to sweep [m^(-2/3)]
+        distance: Propagation distance [m]
+        wavelength: Optical wavelength [m]
+        w0: Beam waist at TX [m]
+        L0: Outer scale [m]
+        l0: Inner scale [m]
+        num_screens: Number of phase screens
+        N: Grid size
+        oversampling: Oversampling factor
+        num_ensembles: Number of ensemble runs per mode per Cn²
+        cn2_model: Turbulence profile model
+        verbose: Print progress
+    
+    Returns:
+        dict: {cn2_value: {(p,l): metrics_dict, ...}, ...}
+    """
+    if LaguerreGaussianBeam is None:
+        raise ImportError("lgBeam.py required for sweep_cn2_for_modes")
+    
+    sweep_results = {}
+    
+    if verbose:
+        print(f"\nCn² Sweep: {len(cn2_values)} points, {len(modes_list)} modes")
+        print(f"Distance: {distance} m, λ: {wavelength*1e9:.0f} nm, w0: {w0*1e3:.1f} mm")
+        print(f"Screens: {num_screens}, Grid: {N}x{N}, Ensembles: {num_ensembles}\n")
+    
+    for cn2 in cn2_values:
+        if verbose:
+            print(f"Cn² = {cn2:.2e} m^(-2/3):")
+        
+        mode_results = measure_scintillation_for_modes(
+            modes_list=modes_list,
+            Cn2=cn2,
+            distance=distance,
+            wavelength=wavelength,
+            w0=w0,
+            L0=L0,
+            l0=l0,
+            num_screens=num_screens,
+            N=N,
+            oversampling=oversampling,
+            num_ensembles=num_ensembles,
+            cn2_model=cn2_model,
+            verbose=verbose
+        )
+        
+        sweep_results[float(cn2)] = mode_results
+        
+        if verbose:
+            print()
+    
+    return sweep_results
 
 
 if __name__ == "__main__":

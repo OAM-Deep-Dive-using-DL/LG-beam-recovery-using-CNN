@@ -1,81 +1,22 @@
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
+import h5py
 import matplotlib.pyplot as plt
 from pathlib import Path
 from tqdm import tqdm
 import argparse
 
-from model import MultiHeadResNet
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'models'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / 'physics'))
+
+from model import FSOModel
 from utils.dataset import FSODataset
+from utils.utils import qpsk_demodulate, compute_ber
 
-def calculate_throughput(ber, n_modes=8, symbol_rate_ghz=1.0, ldpc_rate=0.8135, pilot_overhead=0.1):
-    """
-    Calculate effective throughput accounting for System Overhead.
-    
-    CORRECTION (Post-Audit):
-    The neural network is trained on the full physical layer frames, which include:
-    1. LDPC Encoding (Rate 0.8135)
-    2. Pilot Symbols (10%)
-    
-    Therefore, the network acts as a "Neural Equalizer" replacing the MMSE block.
-    It produces coded symbols which must still be LDPC decoded.
-    Thus, the throughput ceiling is the same as the classical system (11.7 Gbps),
-    NOT 16 Gbps. The advantage is RESILIENCE (Link Availability), not Peak Rate.
-    
-    Args:
-        ber: Coded Bit Error Rate (Raw BER before LDPC)
-        n_modes: Number of spatial modes (default: 8)
-        symbol_rate_ghz: Symbol rate in GSymbol/s (default: 1.0)
-    
-    Returns:
-        throughput_gbps: Effective throughput in Gbps
-    """
-    bits_per_symbol = 2  # QPSK
-    
-    # 1. Raw Line Rate
-    raw_line_rate = n_modes * bits_per_symbol * symbol_rate_ghz # 16 Gbps
-    
-    # 2. Account for Pilots (10%)
-    # Network outputs pilots, but they carry no data
-    data_symbol_rate = raw_line_rate * (1 - pilot_overhead) # 14.4 Gbps
-    
-    # 3. Account for LDPC (Rate 0.8135)
-    # Network outputs coded bits, we need info bits
-    info_bit_rate = data_symbol_rate * ldpc_rate # 11.7 Gbps
-    
-    # LDPC Threshold (Soft Decision)
-    fec_threshold = 0.038  # 3.8% Raw BER
-    
-    if ber < fec_threshold:
-        # LDPC corrects errors -> Full Info Rate
-        throughput = info_bit_rate
-    elif ber < 0.15:
-        # Partial degradation
-        degradation = (ber - fec_threshold) / (0.15 - fec_threshold)
-        throughput = info_bit_rate * (1 - 0.7 * degradation)
-    else:
-        # Link Failure
-        throughput = 0.0
-    
-    return throughput
-
-def qpsk_demod(symbols_complex):
-    """
-    Demodulate complex symbols to bits (QPSK).
-    Constellation: (1+j, -1+j, -1-j, 1-j) / sqrt(2)
-    Bits: 00, 01, 11, 10 (Gray coding) or just quadrant mapping.
-    
-    Let's use simple quadrant mapping:
-    Re > 0, Im > 0 -> 00
-    Re < 0, Im > 0 -> 01
-    Re < 0, Im < 0 -> 11
-    Re > 0, Im < 0 -> 10
-    """
-    # Simply check signs
-    bits_re = (np.real(symbols_complex) < 0).astype(int)
-    bits_im = (np.imag(symbols_complex) < 0).astype(int)
-    return bits_re, bits_im
 
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -85,11 +26,49 @@ def evaluate(args):
     test_dataset = FSODataset(args.data_dir / f"{args.dataset_name}_test.h5", 'test')
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     
-    # Load Model
-    model = MultiHeadResNet(n_modes=test_dataset.n_modes, backbone_name=args.backbone).to(device)
-    model_path = f"best_model_{args.backbone}.pth"
-    print(f"Loading model from {model_path}...")
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # Load Model with proper path resolution
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Initializing {args.backbone}...")
+    model = FSOModel(n_modes=test_dataset.n_modes, backbone_name=args.backbone).to(device)
+    
+    # Try to find the best model
+    if args.model_path:
+        model_path = Path(args.model_path)
+    else:
+        model_name = f"best_model_{args.backbone}.pth"
+        model_path = Path(__file__).parent / model_name
+    
+    # If not found, try searching in parent directory or generic names
+    if not model_path.exists():
+        # Check parent folder
+        parent_path = Path(__file__).parent.parent / model_name
+        if parent_path.exists():
+            model_path = parent_path
+        else:
+             # Try generic "best_model.pth"
+            generic_path = Path(__file__).parent / "best_model.pth"
+            if generic_path.exists():
+                model_path = generic_path
+    
+    if not model_path.exists():
+        print(f"\nError: Model file not found: {model_path}")
+        print("Available models:")
+        for p in Path(__file__).parent.parent.glob("*.pth"):
+            print(f"  {p.name}")
+        # sys.exit(1) # Don't exit, just warn if we are debugging
+    
+    if model_path.exists():
+        print(f"Loading model from {model_path}...")
+        try:
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                print("Detected checkpoint dictionary. Loading 'model_state_dict'...")
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint)
+        except Exception as e:
+            print(f"Warning: Failed to load weights: {e}")
+            print("Running with random weights (for testing pipeline).")
     model.eval()
     
     all_preds = []
@@ -114,27 +93,17 @@ def evaluate(args):
     preds_complex = all_preds[..., 0] + 1j * all_preds[..., 1]
     targets_complex = all_targets[..., 0] + 1j * all_targets[..., 1]
     
-    # 1. Symbol Error Rate (SER)
-    # Hard decision
-    # QPSK: 4 quadrants. If predicted quadrant != target quadrant => Error
+    # 2. Bit Error Rate (BER) - FIXED using proper QPSK demodulation
+    # Convert complex symbols to bits using proper constellation mapping
+    pred_bits = qpsk_demodulate(preds_complex, soft=False)  # [N, 8, 2]
+    target_bits = qpsk_demodulate(targets_complex, soft=False)  # [N, 8, 2]
     
-    # Target quadrants
-    t_re_sign = np.sign(np.real(targets_complex))
-    t_im_sign = np.sign(np.imag(targets_complex))
+    # Flatten for BER calculation
+    pred_bits_flat = pred_bits.reshape(-1)
+    target_bits_flat = target_bits.reshape(-1)
     
-    # Pred quadrants
-    p_re_sign = np.sign(np.real(preds_complex))
-    p_im_sign = np.sign(np.imag(preds_complex))
-    
-    # Errors
-    errors = (t_re_sign != p_re_sign) | (t_im_sign != p_im_sign)
-    ser = np.mean(errors)
-    
-    # 2. Bit Error Rate (BER)
-    # Each symbol is 2 bits.
-    bit_errors = (t_re_sign != p_re_sign).astype(int) + (t_im_sign != p_im_sign).astype(int)
-    total_bits = all_targets.size * 2
-    ber = np.sum(bit_errors) / total_bits
+    ber = compute_ber(target_bits_flat, pred_bits_flat)
+    ser = np.mean(pred_bits != target_bits)  # SER at symbol level
     
     print(f"\n{'='*40}")
     print(f"Results on TEST set ({len(test_dataset)} samples)")
@@ -149,46 +118,72 @@ def evaluate(args):
     # it's safer to collect them in the loop or just access directly if we are sure.
     # We used shuffle=False.
     
-    all_cn2 = test_dataset.cn2
+    # all_cn2 = test_dataset.cn2 # AttributeError: 'FSODataset' object has no attribute 'cn2'
+    # Fix: Read directly from H5 file
+    with h5py.File(test_dataset.h5_path, 'r') as f:
+        all_cn2 = f['cn2'][:]
+    # Get unique Cn2 values (original approach - the issue was in the matching, not the uniqueness)
     unique_cn2 = np.unique(all_cn2)
+    print(f"\nUnique Cn2 values: {len(unique_cn2)} points")
+    print(f"Range: {unique_cn2[0]:.2e} to {unique_cn2[-1]:.2e}")
     
     print(f"\nBreakdown by Turbulence Strength (Cn2):")
-    print(f"{'Cn2':<12} | {'BER':<8} | {'SER':<8} | {'Samples':<8}")
-    print("-" * 46)
+    print(f"{'Cn2':<12} | {'BER':<12} | {'SER':<12} | {'Samples':<8}")
+    print("-" * 54)
     
     ber_per_cn2 = []
-    throughput_per_cn2 = []
     
     for val in unique_cn2:
         mask = (all_cn2 == val)
         
-        # Filter errors for this Cn2
-        # bit_errors is [N, 8] (sum of re+im errors per symbol) -> No, it's [N, 8] ints (0, 1, or 2)
-        # Wait, bit_errors calculation above:
-        # bit_errors = (t_re_sign != p_re_sign).astype(int) + (t_im_sign != p_im_sign).astype(int)
-        # Shape is [N, 8]
+        # Filter predictions and targets for this Cn2
+        subset_preds = preds_complex[mask]
+        subset_targets = targets_complex[mask]
         
-        subset_bit_errors = bit_errors[mask]
-        subset_total_bits = subset_bit_errors.size * 2 # 2 bits per symbol
-        # Wait, subset_bit_errors elements are 0, 1, or 2.
-        # So sum(subset_bit_errors) is total bit errors.
-        # Total bits is number of symbols * 2.
-        
-        subset_ber = np.sum(subset_bit_errors) / (subset_bit_errors.size * 2)
-        
-        # SER
-        # errors is [N, 8] boolean
-        subset_errors = errors[mask]
-        subset_ser = np.mean(subset_errors)
+        # Calculate BER for this subset using proper demodulation
+        if len(subset_preds) > 0:
+            subset_pred_bits = qpsk_demodulate(subset_preds, soft=False)
+            subset_target_bits = qpsk_demodulate(subset_targets, soft=False)
+            
+            subset_ber = compute_ber(subset_target_bits.flatten(), subset_pred_bits.flatten())
+            subset_ser = np.mean(subset_pred_bits != subset_target_bits)
+        else:
+            subset_ber = 0.0
+            subset_ser = 0.0
         
         count = np.sum(mask)
         
-        # Calculate throughput for this Cn2
-        throughput_gbps = calculate_throughput(subset_ber)
-        
-        print(f"{val:.2e}     | {subset_ber:.4f}   | {subset_ser:.4f}   | {count:<8}")
+        print(f"{val:.2e} | {subset_ber:.2e} | {subset_ser:.2e} | {count:<8}")
         ber_per_cn2.append(subset_ber)
-        throughput_per_cn2.append(throughput_gbps)
+
+    # --- Added breakdown for Low vs High Turbulence ---
+    THRESHOLD_CN2 = 5e-14
+    
+    print(f"\n{'-'*54}")
+    print(f"Aggregated Performance by Turbulence Regime:")
+    print(f"Low  (< {THRESHOLD_CN2:.2e}) vs High (>= {THRESHOLD_CN2:.2e})")
+    print(f"{'-'*54}")
+    print(f"{'Regime':<12} | {'BER':<12} | {'SER':<12} | {'Samples':<8}")
+    print(f"{'-'*54}")
+    
+    low_mask = (all_cn2 < THRESHOLD_CN2)
+    high_mask = (all_cn2 >= THRESHOLD_CN2)
+    
+    for name, mask in [("Low", low_mask), ("High", high_mask)]:
+        count = np.sum(mask)
+        if count > 0:
+            regime_preds = preds_complex[mask]
+            regime_targets = targets_complex[mask]
+            
+            regime_pred_bits = qpsk_demodulate(regime_preds, soft=False)
+            regime_target_bits = qpsk_demodulate(regime_targets, soft=False)
+            
+            regime_ber = compute_ber(regime_target_bits.flatten(), regime_pred_bits.flatten())
+            regime_ser = np.mean(regime_pred_bits != regime_target_bits)
+            print(f"{name:<12} | {regime_ber:.2e} | {regime_ser:.2e} | {count:<8}")
+        else:
+             print(f"{name:<12} | {'N/A':<12} | {'N/A':<12} | {0:<8}")
+    print(f"{'='*54}")
 
     # 4. Diagnosis Statistics
     print(f"\n{'='*40}")
@@ -219,71 +214,32 @@ def evaluate(args):
     else:
         print(">> DIAGNOSIS: Mixed/Unknown errors.")
 
-    # 5. Plot BER vs Cn2
-    plt.figure(figsize=(10, 6))
-    plt.semilogx(unique_cn2, ber_per_cn2, 'o-', linewidth=2)
-    plt.grid(True, which="both", ls="-", alpha=0.4)
-    plt.xlabel('Turbulence Strength ($C_n^2$)')
-    plt.ylabel('Bit Error Rate (BER)')
-    plt.title('BER vs. Turbulence Strength')
-    plt.axhline(0, color='black', linewidth=0.5)
-    plt.ylim(bottom=0)
-    plt.savefig("evaluation_ber_curve.png")
-    print("\nSaved 'evaluation_ber_curve.png'")
-    
-    # 6. Plot Throughput vs Cn2
-    plt.figure(figsize=(10, 6))
-    plt.semilogx(unique_cn2, throughput_per_cn2, 's-', linewidth=2, color='green', markersize=6)
+    # 5. Plot BER vs Cn2 (MAIN PLOT - Your Preferred Detailed Style)
+    plt.figure(figsize=(12, 8))
+    plt.semilogx(unique_cn2, ber_per_cn2, 'o-', linewidth=2, markersize=6, color='blue')
     plt.grid(True, which="both", ls="-", alpha=0.4)
     plt.xlabel('Turbulence Strength ($C_n^2$) [$m^{-2/3}$]', fontsize=12)
-    plt.ylabel('Throughput (Gbps)', fontsize=12)
-    plt.title('Effective Throughput vs. Turbulence Strength', fontsize=14)
+    plt.ylabel('Bit Error Rate (BER)', fontsize=12)
+    plt.title('BER vs Turbulence Strength - DETAILED TREND', fontsize=14, fontweight='bold')
     
-    # Add reference line for max throughput
-    max_throughput = calculate_throughput(0.0)  # BER = 0
-    plt.axhline(max_throughput, color='blue', linestyle='--', linewidth=1, alpha=0.5, label=f'Max Rate ({max_throughput:.1f} Gbps)')
-    
-    # Add FEC threshold marker
-    plt.axhline(max_throughput * 0.5, color='orange', linestyle=':', linewidth=1, alpha=0.5, label='Degraded (50%)')
-    plt.axhline(0, color='red', linestyle=':', linewidth=1, alpha=0.5, label='Link Failure')
+    # Add reference lines and regions (your preferred enhancements)
+    plt.axvline(5e-14, color='red', linestyle='--', alpha=0.7, linewidth=2, label='5e-14 Threshold')
+    plt.axhline(0.01, color='orange', linestyle=':', alpha=0.7, linewidth=1.5, label='1% BER Target')
+    plt.axhline(0.1, color='green', linestyle=':', alpha=0.7, linewidth=1.5, label='10% BER Target')
+    plt.axvspan(1e-18, 5e-14, alpha=0.1, color='green', label='Low BER Region')
+    plt.axvspan(5e-14, 1e-12, alpha=0.1, color='red', label='High BER Region')
     
     plt.legend(fontsize=10)
-    plt.ylim(bottom=-0.5, top=max_throughput * 1.1)
-    plt.savefig("evaluation_throughput_curve.png", dpi=300)
-    print("Saved 'evaluation_throughput_curve.png'")
-    
-    # 7. Combined BER + Throughput Plot (Dual Y-axis)
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    
-    # BER on left axis
-    color1 = 'tab:red'
-    ax1.set_xlabel('Turbulence Strength ($C_n^2$) [$m^{-2/3}$]', fontsize=12)
-    ax1.set_ylabel('Bit Error Rate (BER)', color=color1, fontsize=12)
-    ax1.semilogx(unique_cn2, ber_per_cn2, 'o-', color=color1, linewidth=2, markersize=6, label='BER')
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.grid(True, which="both", ls="-", alpha=0.3)
-    ax1.set_ylim(bottom=0, top=max(ber_per_cn2) * 1.1)
-    
-    # Throughput on right axis
-    ax2 = ax1.twinx()
-    color2 = 'tab:green'
-    ax2.set_ylabel('Throughput (Gbps)', color=color2, fontsize=12)
-    ax2.semilogx(unique_cn2, throughput_per_cn2, 's-', color=color2, linewidth=2, markersize=6, label='Throughput')
-    ax2.tick_params(axis='y', labelcolor=color2)
-    ax2.set_ylim(bottom=-0.5, top=max_throughput * 1.1)
-    
-    # Add FEC threshold annotation
-    ax1.axhline(0.038, color='orange', linestyle='--', linewidth=1, alpha=0.5)
-    ax1.text(unique_cn2[0], 0.04, 'FEC Threshold (3.8%)', fontsize=9, color='orange')
-    
-    plt.title('BER and Throughput vs. Turbulence Strength', fontsize=14)
-    fig.tight_layout()
-    plt.savefig("evaluation_ber_throughput_combined.png", dpi=300)
-    print("Saved 'evaluation_ber_throughput_combined.png'")
+    plt.ylim(bottom=0, top=max(ber_per_cn2) * 1.1)
+    plt.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+    plt.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+    plt.savefig(f"../evaluation_ber_curve_{args.backbone}.png", dpi=300, bbox_inches='tight')
+    print(f"\nSaved MAIN PLOT 'evaluation_ber_curve_{args.backbone}.png' (Your Preferred Detailed Style)")
     
     # Save Data for Comparison Plotting
-    np.savez("cnn_results.npz", cn2=unique_cn2, ber=ber_per_cn2, throughput=throughput_per_cn2)
-    print("Saved 'cnn_results.npz'")
+    output_filename = f"../../cnn_results_{args.backbone}_{args.dataset_name}.npz"
+    np.savez(output_filename, cn2=unique_cn2, ber=ber_per_cn2)
+    print(f"Saved '{output_filename}'")
     
     # 5. Constellation Plot (Subset)
     plt.figure(figsize=(8, 8))
@@ -300,15 +256,30 @@ def evaluate(args):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.title(f"Recovered Constellation (Overall BER={ber:.4f})")
-    plt.savefig("evaluation_constellation.png")
+    plt.savefig("../../evaluation_constellation.png")
     print("Saved 'evaluation_constellation.png'")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=Path, default=Path('dataset'))
-    parser.add_argument('--dataset_name', type=str, default='fso_oam_turbulence_v1')
-    parser.add_argument('--backbone', type=str, default='resnet18', choices=['resnet18', 'resnet18_cbam'])
+    parser = argparse.ArgumentParser(description="Evaluate FSO-OAM CNN Receiver")
+    parser.add_argument('--data_dir', type=Path, default=Path('../../data/dataset'),
+                       help='Path to dataset directory (default: ../../data/dataset)')
+    parser.add_argument('--dataset_name', type=str, default='fso_oam_turbulence_v1',
+                       help='Dataset name prefix (e.g., fso_oam_turbulence_v1)')
     parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--backbone', type=str, default='convnext_tiny', help='Backbone architecture')
+    parser.add_argument('--model_path', type=str, default=None, help='Explicit path to model file')
     args = parser.parse_args()
+    
+    # Validate dataset exists
+    test_path = args.data_dir / f"{args.dataset_name}_test.h5"
+    
+    if not test_path.exists():
+        print(f"\nError: Test dataset not found: {test_path}")
+        print(f"\nGenerate dataset first using the canonical generator:")
+        print(f"  cd ../../data/generators")
+        print(f"  python generate_dataset.py --config configs/config.json --split test")
+        print(f"\nOr specify custom dataset location with --data_dir flag.\n")
+        import sys
+        sys.exit(1)
     
     evaluate(args)

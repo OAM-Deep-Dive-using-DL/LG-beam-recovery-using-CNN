@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-f_path = "fso_oam_turbulence_v1_train.h5"
+f_path = "/Users/srivatsadavuluri/Developer/FSO beam recovery/models/CNN Trials/data/dataset/config_fso_train.h5"
 
 if not os.path.exists(f_path):
     print(f"File not found: {f_path}")

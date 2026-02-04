@@ -5,10 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import fft2, ifft2, fftfreq
 from scipy.ndimage import distance_transform_edt
-from numpy import trapz  # For Cn2 integration (np.trapz alias; NumPy compat)
+from numpy import trapz  
 import warnings
 
-# Script dir for lgBeam
+
 try:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -146,40 +146,27 @@ class AtmosphericTurbulence:
 
     def rytov_variance(self, distance, beam_type="plane"):
         """
-        Long-term Rytov σ_R² (Andrews & Phillips 2005, Eq. 9.48); beam/OAM/M² corrected.
-        
-        Corrections applied:
-        1. OAM factor (1+|l|): Project-specific approximation for orbital angular momentum
-           perturbations (Wang et al., Nat. Photon. 2012). Accounts for increased sensitivity
-           of higher-order OAM modes to turbulence-induced phase distortions.
-        2. M² factor (M²^{7/6}): Beam quality scaling for intensity variance (Gbur 2008).
-           Separate from OAM factor; accounts for beam divergence effects on turbulence response.
-           M² = 2p + |l| + 1 for LG_{p,l} modes (Siegman 1986).
-        3. Gaussian beam reduction: Andrews & Phillips (2005) Eq. 11.32 for collimated beams.
+        Long-term Rytov σ_R² (Andrews & Phillips 2005, Eq. 9.48).
+
+        NOTE: OAM and M²-specific scaling has been disabled here so that
+        σ_R² reflects the canonical plane/spherical/Gaussian values.
+        Use the split-step simulation (phase screens) to study OAM/M²
+        sensitivity numerically.
         """
         sigma_plane = 1.23 * self.Cn2 * (self.k ** (7.0 / 6.0)) * (distance ** (11.0 / 6.0))
-        
-        # OAM factor: project-specific approximation (1+|l|)
-        # Note: This is not standard literature but a reasonable approximation for OAM mode
-        # sensitivity to turbulence. Documented as project-specific enhancement.
-        oam_factor = 1.0 + self.beam_order  # OAM boost (Wang Nat. Photon. 2012)
-        
-        # M² factor: beam quality scaling for intensity variance (Gbur 2008)
-        # M² effect is separate from OAM factor and should be included for accurate modeling
-        m2_factor = self.M2 ** (7.0 / 6.0)  # Intensity variance scaling with beam quality
-        
+
         if beam_type == "plane":
-            return sigma_plane * oam_factor * m2_factor
+            return sigma_plane
         elif beam_type == "spherical":
-            return 0.5 * sigma_plane * oam_factor * m2_factor
+            return 0.5 * sigma_plane
         elif beam_type in ("gaussian", "collimated"):
             if self.w0 is None:
-                return sigma_plane * oam_factor * m2_factor
-            # Beam reduction (Andrews & Phillips 2005, Eq. 11.32)
+                return sigma_plane
+            # Beam reduction (Andrews & Phillips 2005, Eq. 11.32) for collimated Gaussian beam
             Lambda = distance / (self.k * self.w0 ** 2 / 2.0)
             Q = max(1.0, 1.0 + (self.k * self.w0 ** 2 / distance))
             reduction = 1.0 / (1.0 + 1.63 * Lambda ** (6.0 / 5.0) * sigma_plane ** (6.0 / 5.0))
-            return sigma_plane * oam_factor * m2_factor * reduction
+            return sigma_plane * reduction
         else:
             raise ValueError(f"Unknown beam_type: {beam_type}")
 
@@ -401,12 +388,16 @@ def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling
 
     strehls = []
     scintillations = []
+    overlaps = []
+    intensity_correlations = []
     print(f"  Ensemble analysis ({num_ensembles} realizations, N={N}, δ={delta*1000:.2f}mm):")
     for ens in range(num_ensembles):
         result = apply_multi_layer_turbulence(initial_field, beam, layers, total_distance,
                                               N=N, oversampling=oversampling, L0=L0, l0=l0)
-        final_I = np.abs(result['final_field'])**2
-        pristine_I = np.abs(result['pristine_field'])**2
+        final_field = result['final_field']
+        pristine_field = result['pristine_field']
+        final_I = np.abs(final_field)**2
+        pristine_I = np.abs(pristine_field)**2
         if np.isnan(final_I).any() or np.sum(final_I) == 0:
             print(f"    Ens {ens+1}: Invalid (NaN/spread); skip")
             continue
@@ -418,21 +409,272 @@ def analyze_turbulence_effects(beam, layers, total_distance, N=256, oversampling
         roi_mask = pristine_I > (np.max(pristine_I) / np.e**2)
         if np.sum(roi_mask) > 0:
             I_roi = final_I[roi_mask]
+            pristine_roi = pristine_I[roi_mask]
             mean_I = np.mean(I_roi)
             sigma_i2 = np.var(I_roi) / (mean_I**2 + 1e-12)
             scintillations.append(sigma_i2)
+            # Intensity correlation within ROI (shape distortion metric)
+            if I_roi.size > 1:
+                I_vec = I_roi.ravel().astype(float)
+                P_vec = pristine_roi.ravel().astype(float)
+                I_vec = I_vec - np.mean(I_vec)
+                P_vec = P_vec - np.mean(P_vec)
+                denom_corr = np.sqrt(np.sum(I_vec**2) * np.sum(P_vec**2)) + 1e-12
+                corr = float(np.sum(I_vec * P_vec) / denom_corr)
+            else:
+                corr = np.nan
+            intensity_correlations.append(corr)
+        else:
+            intensity_correlations.append(np.nan)
+        # Mode overlap (field inner-product based)
+        num_ip = np.vdot(pristine_field, final_field)
+        denom_ip = np.sqrt(np.sum(np.abs(pristine_field)**2) * np.sum(np.abs(final_field)**2)) + 1e-12
+        overlap_val = float((np.abs(num_ip)**2) / (denom_ip**2 + 1e-24))
+        overlaps.append(overlap_val)
+
         # Fixed print: Pre-compute for conditional
         sigma_print = f"{sigma_i2:.3f}" if not np.isnan(sigma_i2) else 'N/A'
         print(f"    Ens {ens+1}: Strehl={strehl:.3f}, σ_I²={sigma_print}")
 
     strehl_mean = np.mean(strehls) if strehls else 0.0
     scint_mean = np.nanmean(scintillations) if scintillations else np.nan
+    overlap_mean = np.nanmean(overlaps) if overlaps else np.nan
+    int_corr_mean = np.nanmean(intensity_correlations) if intensity_correlations else np.nan
     if verbose:
         scint_print = f"{scint_mean:.3f}" if not np.isnan(scint_mean) else 'N/A'
+        overlap_print = f"{overlap_mean:.3f}" if not np.isnan(overlap_mean) else 'N/A'
+        corr_print = f"{int_corr_mean:.3f}" if not np.isnan(int_corr_mean) else 'N/A'
         print(f"  Avg: Strehl={strehl_mean:.3f} ±{np.std(strehls):.3f}, σ_I²={scint_print} ±{np.nanstd(scintillations):.3f}")
+        print(f"       Mode-overlap≈{overlap_print}, Intensity-corr≈{corr_print}")
         if len(scintillations) < num_ensembles:
             print("  Note: Some ensembles lost ROI (strong spreading)")
-    return {'strehl_mean': strehl_mean, 'scint_mean': scint_mean}, result
+    return {'strehl_mean': strehl_mean,
+            'scint_mean': scint_mean,
+            'overlap_mean': overlap_mean,
+            'intensity_corr_mean': int_corr_mean}, result
+
+
+
+def measure_scintillation_for_modes(
+    modes,
+    wavelength: float = 1550e-9,
+    w0: float = 25e-3,
+    distance: float = 1000.0,
+    ground_Cn2: float = 1e-13,
+    L0: float = 10.0,
+    l0: float = 0.005,
+    N: int = 256,
+    oversampling: int = 1,
+    num_screens: int = 20,
+    num_ensembles: int = 5,
+    cn2_model: str = "uniform",
+):
+    """Convenience wrapper to study scintillation and mode overlap for several LG modes.
+
+    Parameters mirror those used in the standalone study script, but are kept here
+    so that oam_scintillation_study.py can be deleted without losing functionality.
+    """
+    results = []
+
+    print("\n=== OAM / M^2 Scintillation Study (from turbulence module) ===")
+    print(f"λ = {wavelength*1e9:.0f} nm, w0 = {w0*1e3:.1f} mm, L = {distance:.1f} m")
+    print(f"Cn² = {ground_Cn2:.2e} m^(-2/3), L0 = {L0} m, l0 = {l0*1e3:.1f} mm")
+    print(f"Grid: N = {N}, oversampling = {oversampling}x, num_screens = {num_screens}, ensembles = {num_ensembles}")
+
+    for (p, l) in modes:
+        print("\n--- Mode p={}, l={} ---".format(p, l))
+        beam = LaguerreGaussianBeam(p, l, wavelength, w0)
+
+        layers = create_multi_layer_screens(
+            total_distance=distance,
+            num_screens=num_screens,
+            wavelength=wavelength,
+            ground_Cn2=ground_Cn2,
+            L0=L0,
+            l0=l0,
+            cn2_model=cn2_model,
+            verbose=False,
+        )
+
+        stats, _ = analyze_turbulence_effects(
+            beam=beam,
+            layers=layers,
+            total_distance=distance,
+            N=N,
+            oversampling=oversampling,
+            L0=L0,
+            l0=l0,
+            num_ensembles=num_ensembles,
+            verbose=True,
+        )
+
+        strehl_mean = float(stats.get("strehl_mean", 0.0))
+        scint_mean = stats.get("scint_mean")
+        scint_mean_val = float(scint_mean) if scint_mean is not None and not np.isnan(scint_mean) else np.nan
+        overlap_mean = stats.get("overlap_mean")
+        overlap_mean_val = float(overlap_mean) if overlap_mean is not None and not np.isnan(overlap_mean) else np.nan
+        int_corr_mean = stats.get("intensity_corr_mean")
+        int_corr_mean_val = float(int_corr_mean) if int_corr_mean is not None and not np.isnan(int_corr_mean) else np.nan
+
+        res = {
+            "p": p,
+            "l": l,
+            "abs_l": abs(l),
+            "M2": beam.M_squared,
+            "strehl_mean": strehl_mean,
+            "scint_mean": scint_mean_val,
+            "overlap_mean": overlap_mean_val,
+            "intensity_corr_mean": int_corr_mean_val,
+        }
+        results.append(res)
+
+        print(
+            f"Mode LG_{{{p}}}^{{{l}}}: M² = {beam.M_squared:.1f}, |l| = {abs(l)}, "
+            f"Strehl ≈ {strehl_mean:.3f}, σ_I² ≈ {scint_mean_val:.3f}, "
+            f"overlap ≈ {overlap_mean_val:.3f}, I-corr ≈ {int_corr_mean_val:.3f}"
+        )
+
+    return results
+
+
+
+def sweep_cn2_for_modes(
+    modes,
+    cn2_values,
+    wavelength: float = 1550e-9,
+    w0: float = 25e-3,
+    distance: float = 1000.0,
+    L0: float = 10.0,
+    l0: float = 0.005,
+    N: int = 256,
+    oversampling: int = 1,
+    num_screens: int = 20,
+    num_ensembles: int = 5,
+    cn2_model: str = "uniform",
+):
+    """Sweep over Cn^2 values and record mode-overlap / correlation per mode.
+
+    Returns a list of entries, each:
+      {"Cn2": value, "results": [ per-mode dicts from measure_scintillation_for_modes ]}
+    """
+    sweep_results = []
+
+    print("\n=== Cn^2 sweep: mode overlap and intensity correlation (turbulence module) ===")
+    print(f"Modes: {modes}")
+    print(f"Cn^2 values: {[f'{c:.2e}' for c in cn2_values]}")
+
+    for cn2 in cn2_values:
+        print("\n" + "="*60)
+        print(f"C_n^2 = {cn2:.2e} m^(-2/3)")
+        res = measure_scintillation_for_modes(
+            modes=modes,
+            wavelength=wavelength,
+            w0=w0,
+            distance=distance,
+            ground_Cn2=cn2,
+            L0=L0,
+            l0=l0,
+            N=N,
+            oversampling=oversampling,
+            num_screens=num_screens,
+            num_ensembles=num_ensembles,
+            cn2_model=cn2_model,
+        )
+        sweep_results.append({"Cn2": cn2, "results": res})
+
+    print("\n=== Compact summary: mode-overlap vs Cn^2 ===")
+    header = "Cn2".ljust(12)
+    for (p, l) in modes:
+        header += f"  LG_{{{p}}}^{{{l}}}".rjust(10)
+    print(header)
+    for entry in sweep_results:
+        cn2 = entry["Cn2"]
+        line = f"{cn2:.2e}".ljust(12)
+        res_list = entry["results"]
+        for (p, l) in modes:
+            match = next((r for r in res_list if r["p"] == p and r["l"] == l), None)
+            ov = match["overlap_mean"] if match is not None else float("nan")
+            line += f" {ov:>9.3f}"
+        print(line)
+
+    return sweep_results
+
+
+def plot_mode_overlap_vs_cn2(sweep_results, modes, save_path=None, log_x=True):
+    """Plot mode overlap vs Cn^2 for a Cn^2 sweep.
+
+    Parameters
+    ----------
+    sweep_results : list of dict
+        Output of sweep_cn2_for_modes: each entry has keys "Cn2" and "results".
+    modes : list of (p, l)
+        Modes in the same order used for the sweep.
+    save_path : str, optional
+        If given, save the figure to this path.
+    log_x : bool, default True
+        If True, plot Cn^2 on a log-scaled x-axis.
+    """
+    if not sweep_results:
+        print("No sweep results to plot.")
+        return None
+
+    cn2_vals = np.array([entry["Cn2"] for entry in sweep_results], dtype=float)
+
+    # Collect overlaps per mode
+    overlaps_by_mode = {mode: [] for mode in modes}
+    for entry in sweep_results:
+        res_list = entry["results"]
+        for mode in modes:
+            p, l = mode
+            match = next((r for r in res_list if r["p"] == p and r["l"] == l), None)
+            ov = match["overlap_mean"] if match is not None else np.nan
+            overlaps_by_mode[mode].append(ov)
+
+    plt.rcParams['font.family'] = 'serif'
+    
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    # Color cycle for modes
+    colors = plt.cm.tab10(np.linspace(0, 1, len(modes)))
+
+    for i, (mode, ov_list) in enumerate(overlaps_by_mode.items()):
+        p, l = mode
+        ax.plot(cn2_vals, ov_list, marker="o", markersize=6, linestyle="-", linewidth=1.5, 
+                color=colors[i], label=f"LG $\ell={l}, p={p}$")
+
+    if log_x:
+        ax.set_xscale("log")
+
+    ax.set_xlabel(r"Turbulence Strength $C_n^2$ [$m^{-2/3}$]", fontsize=12, fontweight='bold')
+    ax.set_ylabel("Mode Overlap Integral", fontsize=12, fontweight='bold')
+    ax.set_title("Mode Purity vs. Turbulence Strength", fontsize=14, fontweight='bold', pad=15)
+    
+    # Grid settings
+    ax.grid(True, which="major", alpha=0.6, linestyle='--')
+    ax.grid(True, which="minor", alpha=0.2, linestyle=':')
+    
+    # Legend
+    ax.legend(title="Spatial Modes", fontsize=10, title_fontsize=11, loc='lower left', framealpha=0.9)
+
+    # Explanation of metric (Publication annotation)
+    text = (
+        r"Overlap $\eta = \frac{|\langle E_{pristine}, E_{turb}\rangle|^2}{\|E_{pristine}\|^2 \|E_{turb}\|^2}$" "\n"
+        r"$\eta \to 1$: Pure Mode, $\eta \to 0$: Complete Crosstalk"
+    )
+    ax.text(0.98, 0.98, text, transform=ax.transAxes,
+            fontsize=9, va="top", ha="right", family='serif',
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", alpha=0.9, ec="gray"))
+
+    fig.tight_layout()
+
+    if save_path:
+        out_dir = os.path.dirname(save_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved mode-overlap vs Cn^2 plot to: {save_path}")
+
+    return fig
 
 
 
@@ -665,15 +907,15 @@ if __name__ == "__main__":
     WAVELENGTH = 1550e-9
     W0 = 25e-3
     DISTANCE = 1000.0
-    GROUND_CN2 = 1e-17
+    GROUND_CN2 = 1e-13
     L0_OUTER = 10.0
     L0_INNER = 0.005
     N_GRID = 256
     OVERSAMPLING = 1
-    NUM_SCREENS_OPTIONS = [20, 25, 30]
+    NUM_SCREENS_OPTIONS = [1, 2, 3]
     CN2_MODEL = "uniform"
-    L = 2
-    P = 0
+    L = 0
+    P = 1
 
     print(f"Config: λ={WAVELENGTH*1e9:.0f} nm, w0={W0*1e3:.1f} mm, L={DISTANCE} m")
     print(f"Cn²={GROUND_CN2:.1e} ({CN2_MODEL}), L0={L0_OUTER}m, l0={L0_INNER*1000:.0f}mm")
