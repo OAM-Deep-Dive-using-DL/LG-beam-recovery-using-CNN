@@ -9,6 +9,7 @@ from tqdm import tqdm
 from scipy.ndimage import zoom
 import argparse
 import multiprocessing as mp
+import warnings
 # from functools import partial # Unused
 
 # -----------------------------------------------------------------------------
@@ -37,6 +38,12 @@ except ImportError as e:
 
 # Global storage for worker processes to share read-only data
 WORKER_CONTEXT = {}
+CANONICAL_BASELINE = {
+    "n_grid_sim": 512,
+    "num_screens": 25,
+    "pilot_power_ratio": 0.1,
+    "snr_db": 35.0,
+}
 
 def init_worker(context):
     """Initialize worker process with shared data."""
@@ -47,41 +54,61 @@ def init_worker(context):
     base_seed = context.get('random_seed', 42)
     np.random.seed(base_seed + os.getpid())
 
-def _add_noise_proper(intensity, config, signal_power):
+def _sample_snr_db(config):
+    """Sample the SNR setting requested by the config."""
+    aug_config = config.get('augmentation', {})
+    snr_param = aug_config.get('snr_db_range', CANONICAL_BASELINE["snr_db"])
+
+    if isinstance(snr_param, list):
+        if len(snr_param) != 2:
+            raise ValueError(f"snr_db_range must have two entries, got {snr_param}")
+        snr_low, snr_high = map(float, snr_param)
+        if snr_low > snr_high:
+            raise ValueError(f"snr_db_range must be ordered [low, high], got {snr_param}")
+        return float(np.random.uniform(snr_low, snr_high))
+
+    return float(snr_param)
+
+def _add_noise_like_pipeline(field_attenuated, aperture_mask, grid_info, config):
     """
-    Add Gaussian noise matching pipeline.py methodology.
-    Supports both Fixed SNR and Variable SNR ranges.
+    Add complex Gaussian field noise using the same per-pixel rule as pipeline.py.
     """
     aug_config = config.get('augmentation', {})
     if not aug_config.get('add_noise', False):
-        return intensity
+        return field_attenuated, {
+            'snr_db': None,
+            'noise_var_per_pixel': 0.0,
+            'power_per_symbol': float(np.sum(np.abs(field_attenuated * aperture_mask) ** 2) * grid_info['delta']**2)
+        }
 
-    if signal_power <= 0:
-        return intensity
-    
-    # -------------------------------------------------------------------------
-    # SUPERIORITY FEATURE: Variable SNR Support
-    # -------------------------------------------------------------------------
-    snr_param = aug_config.get('snr_db_range', 35) # Default 35dB if missing
-    
-    if isinstance(snr_param, list):
-        # Continuous sampling from range [min, max]
-        target_snr_db = np.random.uniform(snr_param[0], snr_param[1])
-    else:
-        # Fixed Value
-        target_snr_db = float(snr_param)
+    num_pixels_in_aperture = int(np.sum(aperture_mask))
+    if num_pixels_in_aperture <= 0:
+        num_pixels_in_aperture = 1
 
-    # Calculate Noise Power
-    # SNR_dB = 10 * log10(P_signal / P_noise)
-    # => P_noise = P_signal / 10^(SNR/10)
-    noise_power = signal_power / (10**(target_snr_db/10.0))
-    noise_std = np.sqrt(noise_power)
-    
-    noise = np.random.normal(0, noise_std, intensity.shape)
-    noisy_intensity = intensity + noise
-    
-    # Clip to non-negative (Physical Intensity Constraint)
-    return np.maximum(noisy_intensity, 0.0)
+    dA = grid_info['delta'] ** 2
+    field_in_aperture = field_attenuated * aperture_mask
+    power_per_symbol = np.sum(np.abs(field_in_aperture) ** 2) * dA
+    if power_per_symbol <= 0:
+        return field_attenuated, {
+            'snr_db': None,
+            'noise_var_per_pixel': 0.0,
+            'power_per_symbol': 0.0
+        }
+
+    target_snr_db = _sample_snr_db(config)
+    avg_pixel_intensity = power_per_symbol / num_pixels_in_aperture
+    snr_linear = 10 ** (target_snr_db / 10.0)
+    noise_var_per_pixel = avg_pixel_intensity / snr_linear
+    noise_std_per_pixel = np.sqrt(noise_var_per_pixel)
+
+    noise = (noise_std_per_pixel / np.sqrt(2.0)) * (
+        np.random.randn(*field_attenuated.shape) + 1j * np.random.randn(*field_attenuated.shape)
+    )
+    return field_attenuated + noise, {
+        'snr_db': float(target_snr_db),
+        'noise_var_per_pixel': float(noise_var_per_pixel),
+        'power_per_symbol': float(power_per_symbol)
+    }
 
 def _zoom_to_aperture(intensity, grid_info, receiver_diameter):
     """
@@ -186,18 +213,16 @@ def generate_single_sample_physics(cn2_value):
     amplitude_loss = 10**(-L_atm_dB / 20.0)
     E_rx = E_rx * amplitude_loss
     
-    # 6. Aperture Mask
+    # 6. Aperture mask
     receiver_radius = sys_params['receiver_diameter'] / 2.0
     aperture_mask = (grid_info['R'] <= receiver_radius).astype(float)
-    E_rx = E_rx * aperture_mask
-    
-    # 7. Compute Intensity & Add Noise
-    intensity = np.abs(E_rx)**2
-    # Calculate signal power actually hitting the aperture
-    signal_power_in_aperture = np.sum(intensity) * grid_info['delta']**2
-    
-    intensity = _add_noise_proper(intensity, config, signal_power_in_aperture)
-    
+
+    # 7. Add field noise using the canonical per-pixel pipeline rule,
+    # then apply the receiver aperture exactly as the baseline does.
+    E_rx_noisy, noise_metadata = _add_noise_like_pipeline(E_rx, aperture_mask, grid_info, config)
+    E_rx_final = E_rx_noisy * aperture_mask
+    intensity = np.abs(E_rx_final)**2
+
     # 8. Smart Zoom & Downsample
     intensity_zoomed = _zoom_to_aperture(intensity, grid_info, sys_params['receiver_diameter'])
     
@@ -220,8 +245,9 @@ def generate_single_sample_physics(cn2_value):
         'distance': sys_params['distance'],
         'wavelength': sys_params['wavelength'],
         'attenuation_dB': L_atm_dB,
-        'signal_power': float(signal_power_in_aperture),
-        'snr_db_range': config.get('augmentation', {}).get('snr_db_range', 'unknown')
+        'signal_power': noise_metadata['power_per_symbol'],
+        'sample_snr_db': noise_metadata['snr_db'],
+        'noise_var_per_pixel': noise_metadata['noise_var_per_pixel']
     }
     
     return intensity_downsampled, symbols, metadata
@@ -241,6 +267,11 @@ class PhysicsGroundedDatasetGenerator:
         self.sys_params = self.config['system_parameters']
         self.turb_params = self.config['turbulence_parameters']
         self.grid_params = self.config['grid_parameters']
+        self.data_format = self.config['data_format']
+        self.augmentation = self.config.get('augmentation', {})
+        self.dataset_size = self.config['dataset_size']
+
+        self._validate_config()
         
         # Set Master Seed
         np.random.seed(self.config.get('random_seed', 42))
@@ -252,6 +283,87 @@ class PhysicsGroundedDatasetGenerator:
         
         print(f"✓ Generator Initialized from {config_path.name}")
         print(f"  Cn2 Range: {self.turb_params['cn2_min']:.2e} -> {self.turb_params['cn2_max']:.2e}")
+        self._report_baseline_alignment()
+
+    def _validate_config(self):
+        required_top_level = [
+            'dataset_name', 'system_parameters', 'turbulence_parameters',
+            'dataset_size', 'grid_parameters', 'data_format'
+        ]
+        missing = [key for key in required_top_level if key not in self.config]
+        if missing:
+            raise ValueError(f"Missing required config keys: {missing}")
+
+        n_grid_sim = int(self.grid_params['n_grid_sim'])
+        n_grid_output = int(self.grid_params['n_grid_output'])
+        if n_grid_sim <= 0 or n_grid_output <= 0:
+            raise ValueError("Grid sizes must be positive.")
+        if n_grid_output > n_grid_sim:
+            raise ValueError("n_grid_output cannot exceed n_grid_sim.")
+
+        cn2_min = float(self.turb_params['cn2_min'])
+        cn2_max = float(self.turb_params['cn2_max'])
+        if cn2_min <= 0 or cn2_max <= 0:
+            raise ValueError("Cn^2 bounds must be positive.")
+        if cn2_min > cn2_max:
+            raise ValueError("cn2_min must be <= cn2_max.")
+        if int(self.turb_params['num_screens']) <= 0:
+            raise ValueError("num_screens must be positive.")
+
+        spatial_modes = self.sys_params.get('spatial_modes', [])
+        if not spatial_modes:
+            raise ValueError("system_parameters.spatial_modes cannot be empty.")
+
+        input_shape = self.data_format.get('input_shape')
+        if input_shape is not None:
+            expected_shape = [n_grid_output, n_grid_output]
+            if list(input_shape) != expected_shape:
+                raise ValueError(
+                    f"data_format.input_shape={input_shape} does not match n_grid_output={expected_shape}."
+                )
+
+        aug_enabled = bool(self.augmentation.get('enabled', False))
+        rotation_range = float(self.augmentation.get('rotation_range', 0) or 0)
+        translation_range = float(self.augmentation.get('translation_range', 0) or 0)
+        multiple_realizations = int(self.augmentation.get('multiple_realizations', 1) or 1)
+        if aug_enabled and (rotation_range != 0 or translation_range != 0 or multiple_realizations != 1):
+            raise ValueError(
+                "generate_dataset.py does not implement geometric augmentation or multiple realizations. "
+                "Set augmentation.enabled=false or zero out those fields."
+            )
+
+        snr_param = self.augmentation.get('snr_db_range', CANONICAL_BASELINE['snr_db'])
+        if isinstance(snr_param, list):
+            if len(snr_param) != 2:
+                raise ValueError("augmentation.snr_db_range must contain exactly two numbers.")
+            if float(snr_param[0]) > float(snr_param[1]):
+                raise ValueError("augmentation.snr_db_range must be ordered [low, high].")
+
+        samples_per_cn2 = self.dataset_size.get('samples_per_cn2')
+        if samples_per_cn2 not in (None, 'auto'):
+            raise ValueError(
+                "generate_dataset.py uses continuous Cn^2 sampling and does not support dataset_size.samples_per_cn2."
+            )
+
+        downsampling_method = self.grid_params.get('downsampling_method', 'bilinear')
+        if downsampling_method not in ('bilinear', 'nearest'):
+            raise ValueError("downsampling_method must be 'bilinear' or 'nearest'.")
+
+    def _report_baseline_alignment(self):
+        notes = []
+        if int(self.grid_params['n_grid_sim']) != CANONICAL_BASELINE['n_grid_sim']:
+            notes.append(f"n_grid_sim={self.grid_params['n_grid_sim']} (baseline {CANONICAL_BASELINE['n_grid_sim']})")
+        if int(self.turb_params['num_screens']) != CANONICAL_BASELINE['num_screens']:
+            notes.append(f"num_screens={self.turb_params['num_screens']} (baseline {CANONICAL_BASELINE['num_screens']})")
+        pilot_ratio = float(self.sys_params.get('pilot_parameters', {}).get('power_ratio', 0.0))
+        if abs(pilot_ratio - CANONICAL_BASELINE['pilot_power_ratio']) > 1e-12:
+            notes.append(
+                f"pilot power_ratio={pilot_ratio:.3f} (baseline {CANONICAL_BASELINE['pilot_power_ratio']:.3f})"
+            )
+        if notes:
+            print("  Baseline alignment note:")
+            for note in notes:
+                print(f"    - {note}")
     
     def _init_beams(self):
         self.lg_beams = {}
@@ -271,6 +383,53 @@ class PhysicsGroundedDatasetGenerator:
         # We store boundaries for continuous sampling logic
         self.cn2_min = self.turb_params['cn2_min']
         self.cn2_max = self.turb_params['cn2_max']
+
+    def _sample_cn2_tasks(self, num_samples):
+        if self.cn2_min == self.cn2_max:
+            return [float(self.cn2_min)] * num_samples
+
+        distribution = str(self.turb_params.get('cn2_distribution', 'logarithmic')).lower()
+        weights_cfg = self.config.get('cn2_sampling_weights')
+
+        def sample_range(low, high, count):
+            if distribution.startswith('log'):
+                return 10 ** np.random.uniform(np.log10(low), np.log10(high), count)
+            if distribution.startswith('lin'):
+                return np.random.uniform(low, high, count)
+            raise ValueError(f"Unsupported cn2_distribution: {distribution}")
+
+        if weights_cfg:
+            regions = []
+            weights = []
+            for name, spec in weights_cfg.items():
+                low, high = map(float, spec['range'])
+                weight = float(spec['weight'])
+                if low <= 0 or high <= 0 or low > high:
+                    raise ValueError(f"Invalid cn2_sampling_weights range for '{name}': {spec['range']}")
+                if low < self.cn2_min or high > self.cn2_max:
+                    raise ValueError(
+                        f"cn2_sampling_weights range {spec['range']} for '{name}' falls outside "
+                        f"[{self.cn2_min}, {self.cn2_max}]"
+                    )
+                if weight < 0:
+                    raise ValueError(f"Negative sampling weight for '{name}'.")
+                regions.append((low, high))
+                weights.append(weight)
+
+            weight_sum = sum(weights)
+            if weight_sum <= 0:
+                raise ValueError("cn2_sampling_weights must contain at least one positive weight.")
+
+            probs = np.array(weights, dtype=float) / weight_sum
+            picks = np.random.choice(len(regions), size=num_samples, p=probs)
+            sampled = np.empty(num_samples, dtype=float)
+            for idx, (low, high) in enumerate(regions):
+                mask = picks == idx
+                if np.any(mask):
+                    sampled[mask] = sample_range(low, high, int(np.sum(mask)))
+            return sampled.tolist()
+
+        return sample_range(float(self.cn2_min), float(self.cn2_max), num_samples).tolist()
 
     def _setup_grid(self):
         distance = self.sys_params['distance']
@@ -339,11 +498,8 @@ class PhysicsGroundedDatasetGenerator:
             'qpsk_modulator': self.qpsk_modulator
         }
         
-        # Tasks: Continuous Log-Uniform Sampling of Cn2
-        log_min = np.log10(self.cn2_min)
-        log_max = np.log10(self.cn2_max)
-        log_cn2_samples = np.random.uniform(log_min, log_max, num_samples)
-        tasks = (10**log_cn2_samples).tolist()
+        # Tasks: Sample Cn^2 according to the configured distribution.
+        tasks = self._sample_cn2_tasks(num_samples)
         
         # HDF5
         n_out = self.grid_params['n_grid_output']
@@ -364,6 +520,11 @@ class PhysicsGroundedDatasetGenerator:
             f.attrs['spatial_modes'] = self.sys_params['spatial_modes']
             f.attrs['cn2_min'] = float(self.cn2_min)
             f.attrs['cn2_max'] = float(self.cn2_max)
+            f.attrs['num_screens'] = int(self.turb_params['num_screens'])
+            f.attrs['n_grid_sim'] = int(self.grid_params['n_grid_sim'])
+            f.attrs['n_grid_output'] = int(self.grid_params['n_grid_output'])
+            f.attrs['generator'] = 'generate_dataset.py'
+            f.attrs['noise_model'] = 'pipeline_per_pixel_complex_field'
 
             # Processing
             buffer_intensity = []
@@ -415,6 +576,19 @@ class PhysicsGroundedDatasetGenerator:
         dset_cn2[curr:] = np.array(b_cn2)
         f.flush()
 
+def resolve_config_path(config_arg: str) -> Path:
+    """Resolve config path from absolute path or data/configs-relative name."""
+    config_path = Path(config_arg)
+    if config_path.exists():
+        return config_path.resolve()
+
+    candidate = DATA_DIR / 'configs' / Path(config_arg).name
+    if candidate.exists():
+        return candidate.resolve()
+
+    raise FileNotFoundError(f"Config file not found: {config_arg}")
+
+
 def main():
     try:
         mp.set_start_method('spawn')
@@ -422,39 +596,34 @@ def main():
         pass
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, required=True)
+    parser.add_argument('--config', type=str, nargs='+', required=True,
+                        help='One or more config files. Multiple configs run sequentially.')
     parser.add_argument('--split', type=str, default='all')
     parser.add_argument('--num-samples', type=int, default=None)
     parser.add_argument('--output-dir', type=str, default=None)
     parser.add_argument('--workers', type=int, default=None, help="Number of worker processes per job")
     args = parser.parse_args()
-    
-    # Robust Config Loading
-    # 1. Try absolute/relative as given
-    config_path = Path(args.config)
-    if not config_path.exists():
-         # 2. Try relative to CNN Trials/ (Common case since user runs from root)
-         # If args.config is "data/configs/..." and we are in root, it should have been found.
-         # But if user provided just "configs/...", we check relative to script parent path structure.
-         # Script is in .../data/generators/
-         # Configs are in .../data/configs/
-         
-         # Try .../data/configs/NAME
-         candidate = DATA_DIR / 'configs' / Path(args.config).name
-         if candidate.exists():
-             config_path = candidate
-         else:
-             print(f"Error: Config file not found: {args.config}")
-             sys.exit(1)
-             
-    generator = PhysicsGroundedDatasetGenerator(config_path)
-    
+
+    config_paths = []
+    for config_arg in args.config:
+        try:
+            config_paths.append(resolve_config_path(config_arg))
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+
     splits = ['train', 'val', 'test'] if args.split == 'all' else [args.split]
-    
-    for split in splits:
-        n = args.num_samples if args.num_samples is not None else generator.config['dataset_size'][split]
-        out = Path(args.output_dir) / f"{generator.config['dataset_name']}_{split}.h5" if args.output_dir else None
-        generator.generate_dataset(n, split=split, output_path=out, workers=args.workers)
+
+    for config_path in config_paths:
+        print(f"\n{'=' * 80}")
+        print(f"Starting config: {config_path.name}")
+        print(f"{'=' * 80}")
+        generator = PhysicsGroundedDatasetGenerator(config_path)
+
+        for split in splits:
+            n = args.num_samples if args.num_samples is not None else generator.config['dataset_size'][split]
+            out = Path(args.output_dir) / f"{generator.config['dataset_name']}_{split}.h5" if args.output_dir else None
+            generator.generate_dataset(n, split=split, output_path=out, workers=args.workers)
 
 if __name__ == "__main__":
     main()

@@ -119,16 +119,35 @@ venv.bak/
 
 # mkdocs documentation
 /site
+*.md
 *.mdc 
 *.md5
 
+
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.webp
+*.svg
+*.eps
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.odt
 
 
 datasets/
 # mypy
 .mypy_cache/
-.dmypy.json
-dmypy.json
+*.npz
+
 
 # Pyre type checker
 .pyre/
@@ -138,7 +157,6 @@ dmypy.json
 .idea/
 *.swp
 *.swo
-*~
 .DS_Store
 
 # Model checkpoints and weights

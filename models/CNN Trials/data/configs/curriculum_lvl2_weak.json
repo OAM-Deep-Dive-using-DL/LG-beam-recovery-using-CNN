@@ -47,25 +47,26 @@
                 0,
                 0
             ],
-            "power_ratio": 0.2
+            "power_ratio": 0.1
         }
     },
     "turbulence_parameters": {
         "cn2_min": 1e-17,
         "cn2_max": 1e-16,
         "num_cn2_points": 20,
+        "cn2_distribution": "logarithmic",
         "L0": 10.0,
         "l0_inner": 0.005,
-        "num_screens": 5,
+        "num_screens": 25,
         "cn2_model": "uniform"
     },
     "dataset_size": {
-        "train": 20000,
-        "val": 4000,
-        "test": 4000
+        "train": 50000,
+        "val": 5000,
+        "test": 5000
     },
     "grid_parameters": {
-        "n_grid_sim": 256,
+        "n_grid_sim": 512,
         "n_grid_output": 128,
         "oversampling": 2,
         "downsampling_method": "bilinear"
@@ -73,16 +74,22 @@
     "data_format": {
         "input_type": "intensity",
         "input_channels": 1,
+        "input_shape": [
+            128,
+            128
+        ],
+        "output_type": "symbols",
+        "output_shape": [
+            8,
+            2
+        ],
         "normalize_input": true,
         "normalization_method": "per_sample"
     },
     "augmentation": {
         "enabled": false,
         "add_noise": true,
-        "snr_db_range": [
-            20,
-            35
-        ]
+        "snr_db_range": 35.0
     },
     "random_seed": 42
 }
