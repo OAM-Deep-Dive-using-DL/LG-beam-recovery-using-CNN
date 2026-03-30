@@ -592,8 +592,19 @@ class FSORx:
                 tx_coded_bits = None
                 tx_symbol_matrix = None
 
+        # When LDPC belief propagation runs, demodulation must use the same soft LLRs
+        # passed to the decoder (hard threshold on LLRs), not a separate hard nearest-
+        # neighbor demod path (which can disagree with LLR signs at low noise).
         IDEAL_THRESHOLD = 1e-4
-        if noise_var < IDEAL_THRESHOLD:
+        noise_var_llr = max(float(noise_var), 1e-12)
+        use_ldpc_soft = (self.ldpc is not None) and (not bypass_ldpc)
+
+        if use_ldpc_soft:
+            if verbose:
+                print("   Soft LLRs for demodulation (aligned with LDPC BP input).")
+            llrs = self.qpsk.demodulate_soft(s_est_flat, noise_var_llr)
+            received_bits = (llrs < 0).astype(int)
+        elif noise_var < IDEAL_THRESHOLD:
             if verbose:
                 print("   Low noise: hard decisions.")
             received_bits = self.qpsk.demodulate_hard(s_est_flat)
@@ -601,7 +612,7 @@ class FSORx:
         else:
             if verbose:
                 print("   Using soft LLRs for demodulation.")
-            llrs = self.qpsk.demodulate_soft(s_est_flat, noise_var)
+            llrs = self.qpsk.demodulate_soft(s_est_flat, noise_var_llr)
             received_bits = (llrs < 0).astype(int)
 
         if tx_coded_bits is not None:
@@ -627,6 +638,7 @@ class FSORx:
         if verbose:
             print("7) LDPC decoding")
         decoded_info_bits = np.array([], dtype=int)
+        ldpc_bp_ok = False
         if bypass_ldpc or (self.ldpc is None):
             # bypass or ldpc not available: return coded bits directly (useful for demo)
             decoded_info_bits = received_bits.copy()
@@ -658,9 +670,32 @@ class FSORx:
                     raise ValueError(
                         f"Decoded bitstream shorter than original ({len(decoded_info_bits)} < {orig_len})."
                     )
+                ldpc_bp_ok = True
             except Exception as e:
                 warnings.warn(f"LDPC decode failed: {e}; falling back to hard bits.")
                 decoded_info_bits = received_bits
+
+        info_ber_pre_ldpc = None
+        if ldpc_bp_ok and (self.ldpc is not None) and (original_data_bits is not None):
+            # Pre-LDPC info BER: hard LDPC decode on the same received coded bits as BP.
+            # Post-LDPC BER uses the same original_data_bits length and trimming logic.
+            try:
+                decoded_hard = self.ldpc.decode_hard(received_bits)
+                orig_h = np.asarray(original_data_bits, dtype=int)
+                L_orig_h = len(orig_h)
+                L_rec_h = len(decoded_hard)
+                compare_len_h = min(L_orig_h, L_rec_h)
+                if compare_len_h == 0 and L_orig_h > 0:
+                    info_ber_pre_ldpc = 1.0
+                else:
+                    trimmed_orig_h = orig_h[:compare_len_h]
+                    trimmed_rec_h = decoded_hard[:compare_len_h]
+                    bit_errors_common_h = np.sum(trimmed_orig_h != trimmed_rec_h) if compare_len_h > 0 else 0
+                    len_mismatch_h = abs(L_orig_h - L_rec_h)
+                    bit_errors_h = int(bit_errors_common_h + len_mismatch_h)
+                    info_ber_pre_ldpc = bit_errors_h / L_orig_h if L_orig_h > 0 else 0.0
+            except Exception:
+                info_ber_pre_ldpc = None
 
         if verbose:
             print("8) Performance metrics (BER)")
@@ -692,6 +727,8 @@ class FSORx:
         }
         if coded_ber_metric is not None:
             self.metrics["coded_ber"] = float(coded_ber_metric)
+        if info_ber_pre_ldpc is not None:
+            self.metrics["info_ber_pre_ldpc"] = float(info_ber_pre_ldpc)
 
         # Store symbol samples for diagnostic plots
         sample_lim = min(N_data, 512)

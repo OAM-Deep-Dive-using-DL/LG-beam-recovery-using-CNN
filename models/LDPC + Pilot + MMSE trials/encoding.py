@@ -301,6 +301,11 @@ class PyLDPCWrapper:
         if not (0 < self.k < self.n):
             raise ValueError(f"Invalid LDPC dims inferred: k={self.k}, n={self.n}")
 
+        # pyldpc.decode/get_message are most reliable with dense integer matrices
+        # under the current Python/Numba environment.
+        self.H_dense = np.asarray(self.H.toarray(), dtype=np.int64)
+        self.tG_dense = np.asarray(self.G.T.toarray(), dtype=np.int64)
+
     @property
     def rate(self):
         return float(self.k) / float(self.n)
@@ -404,6 +409,18 @@ class PyLDPCWrapper:
     def encode_hard(self, info_bits: np.ndarray) -> np.ndarray:
         return self.encode(info_bits)
 
+    @staticmethod
+    def _llr_to_pyldpc_observation(llr_values: np.ndarray) -> tuple[np.ndarray, float]:
+        """
+        Convert LLRs to the (y, snr) parameterization expected by pyldpc.decode.
+
+        pyldpc internally computes Lc = 2 * y / var with var = 10^(-snr/10).
+        Choosing snr=0 dB gives var=1, so setting y = LLR / 2 preserves the
+        desired channel evidence exactly.
+        """
+        llr_values = np.asarray(llr_values, dtype=float)
+        return llr_values / 2.0, 0.0
+
     def decode_hard(self, received_bits, max_iters=50):
         r = normalize_bits(np.asarray(received_bits, dtype=int))
         if r.size == 0:
@@ -415,10 +432,10 @@ class PyLDPCWrapper:
             block = r[b * self.n : (b + 1) * self.n].astype(int)
             if getattr(self, "_pyldpc", False) and (pyldpc_decode is not None and pyldpc_get_message is not None):
                 try:
-                    # pyldpc.decode expects LLRs/soft values. Convert hard bits -> large-magnitude LLR:
-                    # bit 0 -> large positive LLR, bit 1 -> large negative LLR
-                    llr = (1.0 - 2.0 * block) * 1e6
-                    x_hat = pyldpc_decode(self.H, llr, maxiter=max_iters)
+                    # Emulate highly reliable hard decisions as large-magnitude LLRs.
+                    llr = (1.0 - 2.0 * block) * 50.0
+                    y_obs, snr_db = self._llr_to_pyldpc_observation(llr)
+                    x_hat = pyldpc_decode(self.H_dense, y_obs, snr_db, maxiter=max_iters)
                     # x_hat may be floats; convert to bits if needed
                     x_hat_arr = np.asarray(x_hat)
                     if np.issubdtype(x_hat_arr.dtype, np.floating):
@@ -427,7 +444,7 @@ class PyLDPCWrapper:
                         x_bits = normalize_bits(x_hat_arr.astype(int))
                     # Extract message bits using get_message (if available)
                     try:
-                        u_hat = pyldpc_get_message(self.G, x_bits)
+                        u_hat = pyldpc_get_message(self.tG_dense, x_bits)
                         u_hat = normalize_bits(np.asarray(u_hat, dtype=int))
                     except Exception:
                         # fallback: if systematic, first k bits are the message
@@ -459,14 +476,15 @@ class PyLDPCWrapper:
         for b in range(num_blocks):
             block_llr = llrs[b * self.n : (b + 1) * self.n]
             try:
-                x_hat = pyldpc_decode(self.H, block_llr, maxiter=max_iter)
+                y_obs, snr_db = self._llr_to_pyldpc_observation(block_llr)
+                x_hat = pyldpc_decode(self.H_dense, y_obs, snr_db, maxiter=max_iter)
                 x_arr = np.asarray(x_hat)
                 if np.issubdtype(x_arr.dtype, np.floating):
                     x_bits = (x_arr < 0).astype(int)
                 else:
                     x_bits = normalize_bits(x_arr.astype(int))
                 try:
-                    u_hat = pyldpc_get_message(self.G, x_bits)
+                    u_hat = pyldpc_get_message(self.tG_dense, x_bits)
                     u_hat = normalize_bits(np.asarray(u_hat, dtype=int))
                 except Exception:
                     u_hat = x_bits[: self.k]

@@ -1,0 +1,14 @@
+{
+  "source_image": "figure1_ber_comparison_IEEE.png",
+  "x_pixel_range": [
+    358.0,
+    3987.0
+  ],
+  "log10_cn2_range": [
+    -18.0,
+    -12.0
+  ],
+  "y_ber0_row": 2267.5,
+  "y_ber50_row": 180.5,
+  "note": "Digitized from raster; original simulation CSV was not present in the repo. Cn2 uses linear mapping from x-pixel to log10(Cn2) over the figure width."
+}
