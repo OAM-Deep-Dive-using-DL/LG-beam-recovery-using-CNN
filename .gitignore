@@ -123,9 +123,8 @@ venv.bak/
 *.mdc 
 *.md5
 
-*.png
-*.jpg
-*.jpeg
+
+
 *.gif
 *.bmp
 *.tiff
@@ -133,7 +132,6 @@ venv.bak/
 *.webp
 *.svg
 *.eps
-*.pdf
 *.doc
 *.docx
 *.xls
