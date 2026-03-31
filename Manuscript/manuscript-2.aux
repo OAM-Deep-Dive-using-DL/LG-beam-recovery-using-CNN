@@ -7,7 +7,7 @@
 \citation{andrews2005laser,paterson2005atmospheric,ren2013atmospheric}
 \citation{huang2014100,ge2021oam}
 \citation{liu2019oam_prl,doster2017machine,karanov2018endtoend,zhao2020cnn,lohani2018turbulence,arya2023oam}
-\citation{ren2013atmospheric}
+\citation{ren2013atmospheric,paterson2005atmospheric}
 \providecommand \oddpage@label [2]{}
 \@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:intro}{{I}{1}{Introduction}{section.1}{}}
@@ -63,22 +63,27 @@
 \newlabel{eq:fso_model}{{7}{5}{Neural Receiver Framework}{equation.7}{}}
 \newlabel{eq:polar_loss}{{8}{5}{Neural Receiver Framework}{equation.8}{}}
 \newlabel{eq:rotation_aug}{{9}{5}{Neural Receiver Framework}{equation.9}{}}
+\citation{schmidt2010numerical,andrews2005laser}
 \@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Neural receiver inference architecture. Intensity-only input flows through stem adaptation, backbone, and a projection head that regresses $M$ complex QPSK symbols. BER/SER is evaluated at coded level (QPSK demodulation to bits). No LDPC decoding stage is used here, allowing direct comparison with the classical chain at pre-LDPC level.}}{6}{figure.4}\protected@file@percent }
 \newlabel{fig:neural_inference}{{4}{6}{Neural receiver inference architecture. Intensity-only input flows through stem adaptation, backbone, and a projection head that regresses $M$ complex QPSK symbols. BER/SER is evaluated at coded level (QPSK demodulation to bits). No LDPC decoding stage is used here, allowing direct comparison with the classical chain at pre-LDPC level}{figure.4}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Curriculum learning training pipeline. Five sequential stages from ideal/very weak ($C_n^2 \approx 10^{-18}$--$10^{-17}$) to extreme ($C_n^2 = 10^{-14}$--$10^{-12}$) turbulence. Weights from each stage are frozen and transferred to the next; Polar Loss and validation-driven checkpointing are applied per stage.}}{6}{figure.5}\protected@file@percent }
 \newlabel{fig:neural_curriculum}{{5}{6}{Curriculum learning training pipeline. Five sequential stages from ideal/very weak ($C_n^2 \approx 10^{-18}$--$10^{-17}$) to extreme ($C_n^2 = 10^{-14}$--$10^{-12}$) turbulence. Weights from each stage are frozen and transferred to the next; Polar Loss and validation-driven checkpointing are applied per stage}{figure.5}{}}
+\@writefile{loa}{\contentsline {algocf}{\numberline {3}{\ignorespaces Neural Receiver Training}}{6}{algocf.3}\protected@file@percent }
+\newlabel{alg:neural_training}{{3}{6}{Neural Receiver Framework}{algocf.3}{}}
+\@writefile{loa}{\contentsline {algocf}{\numberline {4}{\ignorespaces Neural Receiver Inference}}{6}{algocf.4}\protected@file@percent }
+\newlabel{alg:neural_inference}{{4}{6}{Neural Receiver Framework}{algocf.4}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {IV}Results}{6}{section.4}\protected@file@percent }
 \newlabel{sec:results}{{IV}{6}{Results}{section.4}{}}
+\citation{kay1993fundamentals,ren2014mimo_oam}
 \@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Neural Receiver Training Configuration}}{7}{table.4}\protected@file@percent }
 \newlabel{tab:neural_hparams}{{IV}{7}{Neural Receiver Training Configuration}{table.4}{}}
-\@writefile{loa}{\contentsline {algocf}{\numberline {3}{\ignorespaces Neural Receiver Training}}{7}{algocf.3}\protected@file@percent }
-\newlabel{alg:neural_training}{{3}{7}{Neural Receiver Framework}{algocf.3}{}}
-\@writefile{loa}{\contentsline {algocf}{\numberline {4}{\ignorespaces Neural Receiver Inference}}{7}{algocf.4}\protected@file@percent }
-\newlabel{alg:neural_inference}{{4}{7}{Neural Receiver Framework}{algocf.4}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Mode overlap versus turbulence strength $C_n^2$. Each curve shows the overlap of a propagated LG mode with its pristine counterpart. The decline quantifies the loss of modal fidelity that drives inter-modal crosstalk and BER degradation.}}{7}{figure.6}\protected@file@percent }
 \newlabel{fig:mode_overlap}{{6}{7}{Mode overlap versus turbulence strength $C_n^2$. Each curve shows the overlap of a propagated LG mode with its pristine counterpart. The decline quantifies the loss of modal fidelity that drives inter-modal crosstalk and BER degradation}{figure.6}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Classical baseline BER versus turbulence strength $C_n^2$. Pre-LDPC (dashed) and post-LDPC (solid) curves show coding gain in weak turbulence and its collapse in the transition regime.}}{7}{figure.7}\protected@file@percent }
 \newlabel{fig:ber_main}{{7}{7}{Classical baseline BER versus turbulence strength $C_n^2$. Pre-LDPC (dashed) and post-LDPC (solid) curves show coding gain in weak turbulence and its collapse in the transition regime}{figure.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {V}{\ignorespaces Classical Baseline BER at Representative $C_n^2$ (SNR = 35~dB)}}{7}{table.5}\protected@file@percent }
+\newlabel{tab:ber_key}{{V}{7}{Classical Baseline BER at Representative $C_n^2$ (SNR = 35~dB)}{table.5}{}}
+\citation{paterson2005atmospheric,ren2013atmospheric}
 \newlabel{fig:ch_ideal}{{8a}{8}{Subfigure 8a}{subfigure.8.1}{}}
 \newlabel{sub@fig:ch_ideal}{{(a)}{a}{Subfigure 8a\relax }{subfigure.8.1}{}}
 \newlabel{fig:ch_weak}{{8b}{8}{Subfigure 8b}{subfigure.8.2}{}}
@@ -96,8 +101,28 @@
 \@writefile{lof}{\contentsline {subfigure}{\numberline{(c)}{\ignorespaces {Moderate.}}}{8}{subfigure.8.3}\protected@file@percent }
 \@writefile{lof}{\contentsline {subfigure}{\numberline{(d)}{\ignorespaces {Transition/strong.}}}{8}{subfigure.8.4}\protected@file@percent }
 \@writefile{lof}{\contentsline {subfigure}{\numberline{(e)}{\ignorespaces {Extreme.}}}{8}{subfigure.8.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {V}{\ignorespaces Classical Baseline BER at Representative $C_n^2$ (SNR = 35~dB)}}{8}{table.5}\protected@file@percent }
-\newlabel{tab:ber_key}{{V}{8}{Classical Baseline BER at Representative $C_n^2$ (SNR = 35~dB)}{table.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {VI}{\ignorespaces Qualitative Summary of Classical Baseline Behavior}}{8}{table.6}\protected@file@percent }
+\newlabel{tab:performance_summary}{{VI}{8}{Qualitative Summary of Classical Baseline Behavior}{table.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Neural receiver BER across all five curriculum stages, same mixed model. Floor-level performance holds through the ideal and weak regimes; moderate conditions start to introduce occasional excursions; the strong interval pushes BER into $10^{-2}$--$10^{-1}$; and by the extreme regime the model is largely guessing.}}{9}{figure.9}\protected@file@percent }
+\newlabel{fig:neural_stage_ber_all}{{9}{9}{Neural receiver BER across all five curriculum stages, same mixed model. Floor-level performance holds through the ideal and weak regimes; moderate conditions start to introduce occasional excursions; the strong interval pushes BER into $10^{-2}$--$10^{-1}$; and by the extreme regime the model is largely guessing}{figure.9}{}}
+\newlabel{fig:neural_const_ideal}{{10a}{9}{Subfigure 10a}{subfigure.10.1}{}}
+\newlabel{sub@fig:neural_const_ideal}{{(a)}{a}{Subfigure 10a\relax }{subfigure.10.1}{}}
+\newlabel{fig:neural_const_weak}{{10b}{9}{Subfigure 10b}{subfigure.10.2}{}}
+\newlabel{sub@fig:neural_const_weak}{{(b)}{b}{Subfigure 10b\relax }{subfigure.10.2}{}}
+\newlabel{fig:neural_const_moderate}{{10c}{9}{Subfigure 10c}{subfigure.10.3}{}}
+\newlabel{sub@fig:neural_const_moderate}{{(c)}{c}{Subfigure 10c\relax }{subfigure.10.3}{}}
+\newlabel{fig:neural_const_strong}{{10d}{9}{Subfigure 10d}{subfigure.10.4}{}}
+\newlabel{sub@fig:neural_const_strong}{{(d)}{d}{Subfigure 10d\relax }{subfigure.10.4}{}}
+\newlabel{fig:neural_const_extreme}{{10e}{9}{Subfigure 10e}{subfigure.10.5}{}}
+\newlabel{sub@fig:neural_const_extreme}{{(e)}{e}{Subfigure 10e\relax }{subfigure.10.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Neural-receiver constellations at each curriculum stage. Clear four-way clusters in the ideal and weak cases give way to widening scatter in the strong regime; by the extreme stage the original decision boundaries are largely gone.}}{9}{figure.10}\protected@file@percent }
+\newlabel{fig:neural_stage_constellation_progression}{{10}{9}{Neural-receiver constellations at each curriculum stage. Clear four-way clusters in the ideal and weak cases give way to widening scatter in the strong regime; by the extreme stage the original decision boundaries are largely gone}{figure.10}{}}
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(a)}{\ignorespaces {Ideal.}}}{9}{subfigure.10.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(b)}{\ignorespaces {Weak.}}}{9}{subfigure.10.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(c)}{\ignorespaces {Moderate.}}}{9}{subfigure.10.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(d)}{\ignorespaces {Strong.}}}{9}{subfigure.10.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {subfigure}{\numberline{(e)}{\ignorespaces {Extreme.}}}{9}{subfigure.10.5}\protected@file@percent }
+\citation{andrews2005laser}
 \bibstyle{IEEEtran}
 \bibdata{references}
 \bibcite{khalighi2014survey}{1}
@@ -123,31 +148,11 @@
 \bibcite{viterbi1983nonlinear}{21}
 \bibcite{liu2022convnet}{22}
 \bibcite{tan2019efficientnet}{23}
-\@writefile{lot}{\contentsline {table}{\numberline {VI}{\ignorespaces Qualitative Summary of Classical Baseline Behavior}}{9}{table.6}\protected@file@percent }
-\newlabel{tab:performance_summary}{{VI}{9}{Qualitative Summary of Classical Baseline Behavior}{table.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {V}Conclusion}{9}{section.5}\protected@file@percent }
-\newlabel{sec:conclusion}{{V}{9}{Conclusion}{section.5}{}}
-\@writefile{toc}{\contentsline {section}{References}{9}{section*.1}\protected@file@percent }
 \bibcite{bengio2009curriculum}{24}
 \bibcite{soviany2022curriculum}{25}
 \bibcite{loshchilov2019decoupled}{26}
-\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Neural receiver BER across all five curriculum stages, same mixed model. Floor-level performance holds through the ideal and weak regimes; moderate conditions start to introduce occasional excursions; the strong interval pushes BER into $10^{-2}$--$10^{-1}$; and by the extreme regime the model is largely guessing.}}{10}{figure.9}\protected@file@percent }
-\newlabel{fig:neural_stage_ber_all}{{9}{10}{Neural receiver BER across all five curriculum stages, same mixed model. Floor-level performance holds through the ideal and weak regimes; moderate conditions start to introduce occasional excursions; the strong interval pushes BER into $10^{-2}$--$10^{-1}$; and by the extreme regime the model is largely guessing}{figure.9}{}}
-\newlabel{fig:neural_const_ideal}{{10a}{11}{Subfigure 10a}{subfigure.10.1}{}}
-\newlabel{sub@fig:neural_const_ideal}{{(a)}{a}{Subfigure 10a\relax }{subfigure.10.1}{}}
-\newlabel{fig:neural_const_weak}{{10b}{11}{Subfigure 10b}{subfigure.10.2}{}}
-\newlabel{sub@fig:neural_const_weak}{{(b)}{b}{Subfigure 10b\relax }{subfigure.10.2}{}}
-\newlabel{fig:neural_const_moderate}{{10c}{11}{Subfigure 10c}{subfigure.10.3}{}}
-\newlabel{sub@fig:neural_const_moderate}{{(c)}{c}{Subfigure 10c\relax }{subfigure.10.3}{}}
-\newlabel{fig:neural_const_strong}{{10d}{11}{Subfigure 10d}{subfigure.10.4}{}}
-\newlabel{sub@fig:neural_const_strong}{{(d)}{d}{Subfigure 10d\relax }{subfigure.10.4}{}}
-\newlabel{fig:neural_const_extreme}{{10e}{11}{Subfigure 10e}{subfigure.10.5}{}}
-\newlabel{sub@fig:neural_const_extreme}{{(e)}{e}{Subfigure 10e\relax }{subfigure.10.5}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Neural-receiver constellations at each curriculum stage. Clear four-way clusters in the ideal and weak cases give way to widening scatter in the strong regime; by the extreme stage the original decision boundaries are largely gone.}}{11}{figure.10}\protected@file@percent }
-\newlabel{fig:neural_stage_constellation_progression}{{10}{11}{Neural-receiver constellations at each curriculum stage. Clear four-way clusters in the ideal and weak cases give way to widening scatter in the strong regime; by the extreme stage the original decision boundaries are largely gone}{figure.10}{}}
-\@writefile{lof}{\contentsline {subfigure}{\numberline{(a)}{\ignorespaces {Ideal.}}}{11}{subfigure.10.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {subfigure}{\numberline{(b)}{\ignorespaces {Weak.}}}{11}{subfigure.10.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {subfigure}{\numberline{(c)}{\ignorespaces {Moderate.}}}{11}{subfigure.10.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {subfigure}{\numberline{(d)}{\ignorespaces {Strong.}}}{11}{subfigure.10.4}\protected@file@percent }
-\@writefile{lof}{\contentsline {subfigure}{\numberline{(e)}{\ignorespaces {Extreme.}}}{11}{subfigure.10.5}\protected@file@percent }
-\gdef \@abspage@last{11}
+\bibcite{ren2014mimo_oam}{27}
+\@writefile{toc}{\contentsline {section}{\numberline {V}Conclusion}{10}{section.5}\protected@file@percent }
+\newlabel{sec:conclusion}{{V}{10}{Conclusion}{section.5}{}}
+\@writefile{toc}{\contentsline {section}{References}{10}{section*.1}\protected@file@percent }
+\gdef \@abspage@last{10}

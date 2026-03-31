@@ -36,6 +36,588 @@
 
 ---
 
+## Setup
+
+```bash
+cd "/Users/srivatsadavuluri/Developer/Wireless Communications Related/FSO beam recovery"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+For manuscript builds, ensure `pdflatex` and `bibtex` are installed.
+
+---
+
+## Classical Baseline (MMSE/ZF) Sweep
+
+```bash
+cd "models/LDPC + Pilot + MMSE trials"
+python sweep_baseline.py \
+  --cn2-min 1e-18 \
+  --cn2-max 1e-12 \
+  --num-points 41 \
+  --repeats 3 \
+  --equalizers mmse zf
+```
+
+Default output folder: `ieee_cn2_sweep_results/`  
+Main artifacts:
+
+- `baseline_sweep_raw.json`
+- `baseline_sweep_aggregated.json`
+- `cn2_vs_ber.png/.pdf`
+- `pre_post_ldpc_ber.png/.pdf`
+
+---
+
+## Neural Dataset Generation
+
+Generator:
+
+- `models/CNN Trials/data/generators/generate_dataset.py`
+
+Configs:
+
+- `models/CNN Trials/data/configs/config.json`
+- `models/CNN Trials/data/configs/curriculum_lvl1_ideal.json` ... `curriculum_lvl5_extreme.json`
+
+Generate one config:
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py --config configs/config.json --split all
+```
+
+Generate full curriculum configs:
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py \
+  --config configs/curriculum_lvl1_ideal.json \
+           configs/curriculum_lvl2_weak.json \
+           configs/curriculum_lvl3_moderate.json \
+           configs/curriculum_lvl4_strong.json \
+           configs/curriculum_lvl5_extreme.json \
+  --split all
+```
+
+---
+
+## Neural Training
+
+Script:
+
+- `models/CNN Trials/src/training/train.py`
+
+Example:
+
+```bash
+cd "models/CNN Trials/src/training"
+python train.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --epochs 150 \
+  --batch_size 32 \
+  --loss polar \
+  --device auto
+```
+
+Curriculum runner:
+
+```bash
+cd "models/CNN Trials"
+python src/training/train_curriculum.py
+```
+
+---
+
+## Neural Evaluation
+
+Script:
+
+- `models/CNN Trials/src/evaluation/evaluate.py`
+
+```bash
+cd "models/CNN Trials/src/evaluation"
+python evaluate.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --device auto
+```
+
+Outputs include BER-vs-`C_n^2` plots, constellation plots, and `.npz` result arrays.
+
+---
+
+## Manuscript Build
+
+Primary working source:
+
+- `Manuscript/manuscript-2.tex`
+
+```bash
+cd Manuscript
+pdflatex manuscript-2.tex
+bibtex manuscript-2
+pdflatex manuscript-2.tex
+pdflatex manuscript-2.tex
+```
+
+Other variants:
+
+- `Manuscript/manuscript.tex`
+- `Manuscript/bare.tex`
+
+---
+
+## Citation
+
+If you use this repository, cite your manuscript/software record for:
+
+**OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study**
+
+---
+
+## License
+
+MIT License. See `LICENSE`.
+# OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study
+
+This repository contains an end-to-end simulation and evaluation framework for OAM-multiplexed optical wireless links under atmospheric turbulence. It includes:
+
+- a classical coherent baseline (pilot-aided LS + MMSE/ZF + LDPC),
+- an intensity-only neural receiver (ConvNeXt/EfficientNet variants),
+- a physics-grounded dataset generator (SSFM + Kolmogorov phase screens),
+- and IEEE-style manuscript assets.
+
+The project is organized to support reproducible, matched-condition comparisons between classical and neural receivers across a controlled `C_n^2` sweep.
+
+---
+
+## Repository Layout
+
+- `models/LDPC + Pilot + MMSE trials/`  
+  Classical link-level baseline (`pipeline.py`, `sweep_baseline.py`, BER/channel-matrix outputs).
+
+- `models/CNN Trials/`  
+  Neural pipeline:
+  - `physics/`
+  - `data/generators/`
+  - `src/training/`
+  - `src/evaluation/`
+
+- `Manuscript/`  
+  Paper sources (`manuscript.tex`, `manuscript-2.tex`, `references.bib`) and figure assets.
+
+- `requirements.txt`  
+  Python dependencies.
+
+---
+
+## Environment Setup
+
+```bash
+cd "/Users/srivatsadavuluri/Developer/Wireless Communications Related/FSO beam recovery"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+For LaTeX builds, ensure `pdflatex` and `bibtex` are available.
+
+---
+
+## Classical Baseline Workflow
+
+### Run canonical `C_n^2` sweep
+
+```bash
+cd "models/LDPC + Pilot + MMSE trials"
+python sweep_baseline.py \
+  --cn2-min 1e-18 \
+  --cn2-max 1e-12 \
+  --num-points 41 \
+  --repeats 3 \
+  --equalizers mmse zf
+```
+
+Key outputs (default: `ieee_cn2_sweep_results/`):
+
+- `baseline_sweep_raw.json`
+- `baseline_sweep_aggregated.json`
+- `cn2_vs_ber.png/.pdf`
+- `pre_post_ldpc_ber.png/.pdf`
+- representative channel-matrix image
+
+---
+
+## Neural Dataset Generation
+
+Generator entrypoint:
+
+- `models/CNN Trials/data/generators/generate_dataset.py`
+
+Available configs:
+
+- `models/CNN Trials/data/configs/config.json`
+- `models/CNN Trials/data/configs/curriculum_lvl1_ideal.json` ... `curriculum_lvl5_extreme.json`
+
+### Generate one config (all splits)
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py --config configs/config.json --split all
+```
+
+### Generate curriculum datasets
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py \
+  --config configs/curriculum_lvl1_ideal.json \
+           configs/curriculum_lvl2_weak.json \
+           configs/curriculum_lvl3_moderate.json \
+           configs/curriculum_lvl4_strong.json \
+           configs/curriculum_lvl5_extreme.json \
+  --split all
+```
+
+By default, `.h5` outputs are written under `models/CNN Trials/data/` (or a custom `--output-dir`).
+
+---
+
+## Neural Training
+
+Training script:
+
+- `models/CNN Trials/src/training/train.py`
+
+```bash
+cd "models/CNN Trials/src/training"
+python train.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --epochs 150 \
+  --batch_size 32 \
+  --loss polar \
+  --device auto
+```
+
+Curriculum helper:
+
+```bash
+cd "models/CNN Trials"
+python src/training/train_curriculum.py
+```
+
+---
+
+## Neural Evaluation
+
+Evaluation script:
+
+- `models/CNN Trials/src/evaluation/evaluate.py`
+
+```bash
+cd "models/CNN Trials/src/evaluation"
+python evaluate.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --device auto
+```
+
+Typical outputs:
+
+- BER-vs-`C_n^2` plot (`.png` + `.pdf`)
+- constellation plot (`.png` + `.pdf`)
+- result arrays (`.npz`)
+
+---
+
+## Manuscript Build
+
+Main working manuscript:
+
+- `Manuscript/manuscript-2.tex`
+
+```bash
+cd Manuscript
+pdflatex manuscript-2.tex
+bibtex manuscript-2
+pdflatex manuscript-2.tex
+pdflatex manuscript-2.tex
+```
+
+Other manuscript variants:
+
+- `Manuscript/manuscript.tex`
+- `Manuscript/bare.tex`
+
+---
+
+## Notes
+
+- Baseline-first methodology with matched channel conditions across classical and neural branches.
+- Neural branch is intensity-only and compared against coherent baseline under the same physics.
+- Figure assets include both raster and TikZ/LaTeX publication-quality versions.
+
+---
+
+## Citation
+
+If you use this repository, cite your manuscript/software record for:
+
+**OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study**
+
+---
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
+# OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study
+
+This repository contains an end-to-end simulation and evaluation framework for OAM-multiplexed optical wireless links under atmospheric turbulence. It includes:
+
+- a **classical coherent baseline** (pilot-aided LS + MMSE/ZF + LDPC),
+- an **intensity-only neural receiver** (ConvNeXt/EfficientNet variants),
+- a **physics-grounded dataset generator** (SSFM + Kolmogorov phase screens),
+- and the full **IEEE-style manuscript assets**.
+
+The project is organized to support reproducible, matched-condition comparisons between classical and neural receivers across a controlled `C_n^2` sweep.
+
+---
+
+## Repository Layout
+
+- `models/LDPC + Pilot + MMSE trials/`  
+  Classical link-level baseline (`pipeline.py`, `sweep_baseline.py`, channel matrix/BER outputs).
+
+- `models/CNN Trials/`  
+  Neural pipeline:
+  - physics modules (`physics/`),
+  - dataset generation (`data/generators/`),
+  - training (`src/training/`),
+  - evaluation and comparison plots (`src/evaluation/`).
+
+- `Manuscript/`  
+  Paper sources (`manuscript.tex`, `manuscript-2.tex`, `references.bib`) and figure assets.
+
+- `requirements.txt`  
+  Python dependencies.
+
+---
+
+## Environment Setup
+
+```bash
+cd "/Users/srivatsadavuluri/Developer/Wireless Communications Related/FSO beam recovery"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+For LaTeX builds, ensure a TeX distribution is installed (e.g., TeX Live / MacTeX with `pdflatex` and `bibtex`).
+
+---
+
+## 1) Classical Baseline Workflow
+
+### Run canonical `C_n^2` sweep
+
+```bash
+cd "models/LDPC + Pilot + MMSE trials"
+python sweep_baseline.py \
+  --cn2-min 1e-18 \
+  --cn2-max 1e-12 \
+  --num-points 41 \
+  --repeats 3 \
+  --equalizers mmse zf
+```
+
+Key outputs (inside `ieee_cn2_sweep_results/` by default):
+
+- `baseline_sweep_raw.json`
+- `baseline_sweep_aggregated.json`
+- `cn2_vs_ber.png/.pdf`
+- `pre_post_ldpc_ber.png/.pdf`
+- representative channel-matrix image
+
+---
+
+## 2) Neural Dataset Generation
+
+Dataset generator entrypoint:
+
+- `models/CNN Trials/data/generators/generate_dataset.py`
+
+Available configs:
+
+- `models/CNN Trials/data/configs/config.json`
+- `models/CNN Trials/data/configs/curriculum_lvl1_ideal.json` ... `curriculum_lvl5_extreme.json`
+
+### Generate one full split set from a config
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py --config configs/config.json --split all
+```
+
+### Generate curriculum-stage datasets
+
+```bash
+cd "models/CNN Trials/data/generators"
+python generate_dataset.py \
+  --config configs/curriculum_lvl1_ideal.json \
+           configs/curriculum_lvl2_weak.json \
+           configs/curriculum_lvl3_moderate.json \
+           configs/curriculum_lvl4_strong.json \
+           configs/curriculum_lvl5_extreme.json \
+  --split all
+```
+
+By default, `.h5` outputs are written under `models/CNN Trials/data/` (or a custom `--output-dir`).
+
+---
+
+## 3) Neural Training
+
+Training script:
+
+- `models/CNN Trials/src/training/train.py`
+
+### Standard training
+
+```bash
+cd "models/CNN Trials/src/training"
+python train.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --epochs 150 \
+  --batch_size 32 \
+  --loss polar \
+  --device auto
+```
+
+### Curriculum progression helper
+
+```bash
+cd "models/CNN Trials"
+python src/training/train_curriculum.py
+```
+
+This script runs staged training (`ideal -> weak -> moderate -> strong -> extreme`) with checkpoint carryover.
+
+---
+
+## 4) Neural Evaluation
+
+Evaluation script:
+
+- `models/CNN Trials/src/evaluation/evaluate.py`
+
+```bash
+cd "models/CNN Trials/src/evaluation"
+python evaluate.py \
+  --data_dir ../../data/generated_curriculum \
+  --dataset_name fso_oam_turbulence_v1 \
+  --backbone convnext_tiny \
+  --device auto
+```
+
+Typical outputs:
+
+- BER-vs-`C_n^2` curve (`.png` + `.pdf`)
+- constellation plot (`.png` + `.pdf`)
+- compressed result arrays (`.npz`)
+
+---
+
+## 5) Manuscript Build
+
+Main working paper (with controlled float pass and iterative figure placement):
+
+- `Manuscript/manuscript-2.tex`
+
+```bash
+cd Manuscript
+pdflatex manuscript-2.tex
+bibtex manuscript-2
+pdflatex manuscript-2.tex
+pdflatex manuscript-2.tex
+```
+
+Other manuscript variants:
+
+- `Manuscript/manuscript.tex`
+- `Manuscript/bare.tex`
+
+---
+
+## Notes on Current Scope
+
+- The repository currently reflects a **baseline-first** methodology: same turbulence/channel backbone used for both classical and neural branches.
+- Neural receiver is **intensity-only** and compared against coherent baseline under matched simulation conditions.
+- Figure assets include both raster images and LaTeX/TikZ reconstructions for publication-quality rendering.
+
+---
+
+## Citation
+
+If you use this repository in research, please cite your manuscript/software record for:
+
+**OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study**
+
+(Add your final BibTeX entry here once publication metadata is fixed.)
+
+---
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
+# Deep Learning for OAM Beam Recovery in Atmospheric Turbulence
+
+<div align="center">
+
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Status](https://img.shields.io/badge/status-research-orange.svg)
+
+**Solving the "Deep Fade" problem in Free Space Optical communications using Spatial Attention Neural Networks**
+
+[Key Results](#key-results) • [Quick Start](#quick-start) • [Technical Details](#technical-details) • [Citation](#citation)
+
+</div>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Results](#key-results)
+- [Quick Start](#quick-start)
+- [The Problem](#the-problem)
+- [Our Solution](#our-solution)
+- [Technical Details](#technical-details)
+  - [Architecture Evolution](#architecture-evolution)
+  - [Spatial Attention (CBAM)](#spatial-attention-cbam)
+- [Performance Analysis](#performance-analysis)
+- [Usage Guide](#usage-guide)
+  - [Data Generation](#data-generation)
+  - [Training](#training)
+  - [Evaluation](#evaluation)
+- [Project Structure](#project-structure)
+- [Citation](#citation)
+- [License](#license)
+
+---
+
 ## Overview
 
 This repository presents a **Neural Receiver** for Orbital Angular Momentum (OAM) multiplexed Free Space Optical (FSO) communication systems. We achieve a **30dB improvement** in turbulence resilience compared to classical MMSE receivers by using a ResNet-18 backbone enhanced with Convolutional Block Attention Modules (CBAM).

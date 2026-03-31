@@ -1,62 +1,83 @@
-% Standalone System Model Diagram (OAM-FSO)
-\documentclass[tikz,border=6pt]{standalone}
+% Standalone System Model Diagram (artistic vertical layout)
+\documentclass[tikz,border=7pt]{standalone}
 \usepackage{amsmath}
 \usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric,backgrounds}
 
 \begin{document}
 \begin{tikzpicture}[
-    font=\sffamily,
+    font=\sffamily\small,
     >=Latex,
-    node distance=8mm and 9mm,
-    block/.style={draw, rounded corners=2pt, thick, align=center, minimum height=8mm, minimum width=24mm, fill=blue!8},
-    branch/.style={draw, rounded corners=2pt, thick, align=center, minimum height=8mm, minimum width=28mm, fill=green!10},
-    metric/.style={draw, rounded corners=2pt, thick, align=left, minimum height=8mm, minimum width=45mm, fill=gray!10},
-    split/.style={diamond, draw, thick, aspect=1.7, align=center, inner sep=1pt, fill=orange!15},
-    note/.style={draw, rounded corners=2pt, thick, align=left, minimum width=43mm, fill=yellow!12},
-    flow/.style={-Latex, thick}
+    node distance=5.5mm and 8mm,
+    core/.style={
+      draw, very thick, rounded corners=3pt, align=center,
+      minimum width=48mm, minimum height=8mm, fill=blue!10
+    },
+    split/.style={
+      diamond, draw, very thick, aspect=1.8, align=center,
+      inner sep=1.2pt, fill=orange!20
+    },
+    bproc/.style={
+      draw, thick, rounded corners=3pt, align=center,
+      minimum width=42mm, minimum height=8mm, fill=green!10
+    },
+    result/.style={
+      draw, thick, rounded corners=3pt, align=left,
+      minimum width=56mm, minimum height=9mm, fill=gray!12
+    },
+    flow/.style={-Latex, very thick, color=black!80},
+    cflow/.style={-Latex, very thick, color=teal!70!black},
+    nflow/.style={-Latex, very thick, color=purple!70!black}
 ]
 
-% Shared chain (model-level)
-\node[block] (bits) {Information\\bits $\mathbf{u}$};
-\node[block, right=of bits] (tx) {Coding +\\QPSK mapping};
-\node[block, right=of tx] (oam) {OAM mode\\multiplexing};
-\node[block, right=of oam, minimum width=34mm] (chan) {Atmospheric channel model\\SSFM + phase screens\\$C_n^2$ sweep};
-\node[block, right=of chan] (rx) {Received\\field $E_{rx}$};
-\node[split, right=of rx] (obs) {Shared\\observation};
+% Shared vertical pipeline
+\node[core] (bits) {Information bits $\mathbf{u}$};
+\node[core, below=of bits] (tx) {Coding + QPSK mapping};
+\node[core, below=of tx] (oam) {OAM mode multiplexing};
+\node[core, below=of oam] (chan) {Atmospheric channel: SSFM + phase screens + $C_n^2$ sweep};
+\node[core, below=of chan] (rx) {Received field $E_{rx}$};
+\node[split, below=7mm of rx] (obs) {Shared\\observation};
 
-% Classical branch
-\node[branch, above right=12mm and 12mm of obs, minimum width=31mm] (coh) {Coherent\\modal observation};
-\node[branch, right=of coh, minimum width=32mm] (mmse) {Pilot-aided LS\\$\hat{\mathbf{H}}$ + MMSE\\(+ phase correction)};
-\node[metric, right=of mmse, minimum width=48mm] (cout) {\textbf{Classical outputs}\\Pre-/post-LDPC BER\\Condition number $\kappa(\hat{\mathbf{H}})$};
+% Branches (left: classical, right: neural)
+\node[bproc, below left=10mm and 28mm of obs] (coh) {Coherent modal observation};
+\node[bproc, below=of coh] (mmse) {Pilot-aided LS ($\hat{\mathbf{H}}$) + MMSE\\+ phase correction + LDPC};
+\node[result, below=of mmse] (cout) {\textbf{Classical outputs}\\Pre-/post-LDPC BER\\Condition number $\kappa(\hat{\mathbf{H}})$};
 
-% Neural branch
-\node[branch, below right=12mm and 12mm of obs, minimum width=31mm] (img) {Intensity\\observation\\($128 \times 128 \times 1$)};
-\node[branch, right=of img, minimum width=32mm] (fth) {Learned symbol mapping\\$f_{\theta}(\mathbf{I}) \rightarrow \hat{\mathbf{s}}$};
-\node[metric, right=of fth, minimum width=48mm] (nout) {\textbf{Neural outputs}\\BER/SER by regime\\Constellation evolution};
+\node[bproc, below right=10mm and 28mm of obs] (img) {Intensity observation\\($128\times128\times1$)};
+\node[bproc, below=of img] (fth) {Learned symbol mapping\\$f_{\theta}(\mathbf{I}) \rightarrow \hat{\mathbf{s}}$};
+\node[result, below=of fth] (nout) {\textbf{Neural outputs}\\BER/SER by regime\\Constellation evolution};
 
-% Side notes
-
-% Flows (shared chain)
+% Flows
 \draw[flow] (bits) -- (tx);
 \draw[flow] (tx) -- (oam);
 \draw[flow] (oam) -- (chan);
 \draw[flow] (chan) -- (rx);
 \draw[flow] (rx) -- (obs);
 
-% Branch flows
-\draw[flow] (obs) -- (coh);
-\draw[flow] (coh) -- (mmse);
-\draw[flow] (mmse) -- (cout);
+\draw[cflow] (obs) -- (coh);
+\draw[cflow] (coh) -- (mmse);
+\draw[cflow] (mmse) -- (cout);
 
-\draw[flow] (obs) -- (img);
-\draw[flow] (img) -- (fth);
-\draw[flow] (fth) -- (nout);
+\draw[nflow] (obs) -- (img);
+\draw[nflow] (img) -- (fth);
+\draw[nflow] (fth) -- (nout);
 
-% Group boxes (visual guidance)
+% Track containers + labels
 \begin{scope}[on background layer]
-  \node[draw=blue!35, rounded corners=3pt, thick, fit=(bits)(obs), inner xsep=9pt, inner ysep=5pt] {};
-  \node[draw=green!45!black, rounded corners=3pt, thick, fit=(coh)(mmse)(cout), inner sep=5pt, label={[align=left]above:\textbf{Classical receiver track}}] {};
-  \node[draw=green!45!black, rounded corners=3pt, thick, fit=(img)(fth)(nout), inner sep=5pt, label={[align=left]below:\textbf{Neural receiver track}}] {};
+  \node[
+    draw=blue!50!black, rounded corners=4pt, very thick,
+    fit=(bits)(obs), inner xsep=10pt, inner ysep=6pt,
+    fill=blue!3
+  ] {};
+  \node[
+    draw=teal!65!black, rounded corners=4pt, thick,
+    fit=(coh)(mmse)(cout), inner sep=6pt, fill=teal!5,
+    label={[text=teal!70!black]above:\textbf{Classical receiver track}}
+  ] {};
+  \node[
+    draw=purple!65!black, rounded corners=4pt, thick,
+    fit=(img)(fth)(nout), inner sep=6pt, fill=purple!5,
+    label={[text=purple!70!black]above:\textbf{Neural receiver track}}
+  ] {};
 \end{scope}
 
 \end{tikzpicture}

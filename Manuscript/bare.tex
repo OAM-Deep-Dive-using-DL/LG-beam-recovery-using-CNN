@@ -1,5 +1,5 @@
 % !TEX TS-program = pdflatex
-% !TEX root = manuscript.tex
+% !TEX root = bare.tex
 % !TEX TS-use-input-relative-path = true
 % IEEE TWC: abstract 75--200 words; manuscript $\leq$13 pages (first submission);
 % scope requires a wireless communications problem with channel effects (e.g., fading/coupling) central.
@@ -14,7 +14,6 @@
 \usepackage{graphicx}
 \usepackage{dblfloatfix}
 \usepackage{cite}
-\usepackage{placeins}
 \usepackage{makecell}
 \usepackage{multirow}
 \usepackage{tabularx}
@@ -28,24 +27,38 @@
 \DontPrintSemicolon
 \SetKwInput{KwInput}{Input}
 \SetKwInput{KwOutput}{Output}
+% Encourage floats to stay near callouts in IEEE two-column layout.
+\setcounter{topnumber}{2}
+\setcounter{dbltopnumber}{2}
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\dbltopfraction}{0.9}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.8}
+\renewcommand{\dblfloatpagefraction}{0.8}
 % Float sizing: single-column figures use \linewidth; double-column use \textwidth.
 % Fig.~2 and Fig.~3 (vertical flowcharts): inset within the column so left/right margins remain visible.
 \newcommand{\figcol}{\linewidth}
 \newcommand{\figcolvertw}{0.76\linewidth}
 \newcommand{\figcolverth}{0.56\textheight}
-% Fig.~1 (full-width star figure); Fig.~4 and Fig.~5 use a slightly smaller double-column width.
-\newcommand{\figdbl}{0.98\textwidth}
-\newcommand{\figdblsmall}{0.86\textwidth}
+% Double-column (\texttt{figure*}) widths: tune per figure.
+\newcommand{\figdbl}{0.98\textwidth}% default wide star figures (e.g., merged BER)
+\newcommand{\figdblone}{1.0\textwidth}% Fig.~1: comprehensive system model (full span)
+\newcommand{\figdblfour}{0.51\textwidth}% Fig.~4: neural inference (0.66 - 0.15)
+\newcommand{\figdblfive}{0.66\textwidth}% Fig.~5: curriculum (0.76 - 0.10)
+\newcommand{\figdblnine}{0.68\textwidth}% Fig.~9: merged BER (0.98 - 0.30)
+% Uniform subfigure layout for Fig.~8 and Fig.~10.
+\newcommand{\subfigw}{0.31\textwidth}
+\newcommand{\subfiggap}{2pt}
 
 \begin{document}
 
-\title{Baseline-Validated Receiver Framework for OAM-Multiplexed Optical Wireless Links Under Atmospheric Turbulence}
+\title{OAM-Assisted High-Capacity Transmission: A Link-Level Performance Study}
 
 \author{Srivatsa~Davuluri\textsuperscript{\orcidlink{0000-0000-0000-0000}},
         Baskar~P\textsuperscript{\orcidlink{0000-0000-0000-0000}},
         Abhijit~Bhowmick\textsuperscript{\orcidlink{0000-0000-0000-0000}},
         Sudhanshu~Arya\textsuperscript{\orcidlink{0000-0000-0000-0000}}%
-\thanks{S.~Davuluri, B.~P, A.~Bhowmick, and S.~Arya are with [Institution], [City], [Country] (e-mail: corresponding.author@institution.edu). Replace bracketed placeholders and ORCID entries before IEEE TWC submission.}%
+
 }
 
 \maketitle
@@ -66,13 +79,13 @@ Wireless optical communications, free-space optics, orbital angular momentum, sp
 \section{Introduction}
 \label{sec:intro}
 
-\IEEEPARstart{W}{ireless} communication increasingly relies on spatial degrees of freedom---from multiple antennas in radio to mode-division multiplexing in optical fibers and \emph{optical wireless} links---to raise throughput without proportional bandwidth growth. Free-space optical (FSO) transmission addresses short- and medium-range connectivity---campus interconnects, temporary backhaul, airborne relays, and scenarios where fiber is costly or impossible---using narrow beams, license-free spectrum, and mature photonics~\cite{khalighi2014survey, kaushal2016optical}. Orbital angular momentum (OAM) multiplexing is one such spatial approach: distinct Laguerre--Gaussian (LG) modes carry parallel streams when orthogonality is preserved end-to-end~\cite{allen1992orbital, wang2012terabit, willner2015optical}. The effective spatial channel is then analogous to a multi-input multi-output (MIMO) mixing matrix in the mode domain; the design question is how that matrix behaves once the outdoor channel is random rather than ideal.
+\IEEEPARstart{W}{ireless} communication increasingly relies on spatial degrees of freedom---from multiple antennas in radio to mode-division multiplexing in optical fibers and \emph{optical wireless} links---to raise throughput without proportional bandwidth growth. Free-space optical transmission addresses short- and medium-range connectivity---campus interconnects, temporary backhaul, airborne relays, and scenarios where fiber is costly or impossible---using narrow beams, license-free spectrum, and mature photonics~\cite{khalighi2014survey, kaushal2016optical}. Orbital angular momentum (OAM) multiplexing is one such spatial approach: distinct Laguerre--Gaussian (LG) modes carry parallel streams when orthogonality is preserved end-to-end~\cite{allen1992orbital, wang2012terabit, willner2015optical}. The effective spatial channel is then analogous to a multi-input multi-output (MIMO) mixing matrix in the mode domain; the design question is how that matrix behaves once the outdoor channel is random rather than ideal.
 
-The limiting factor in outdoor FSO is the atmosphere. Turbulent eddies impose random phase and amplitude distortions along the path, producing scintillation (fading-like intensity fluctuations), beam wander, and inter-modal coupling~\cite{andrews2005laser, paterson2005atmospheric, ren2013atmospheric}. For OAM systems, the practical effect is loss of spatial orthogonality: energy leaks across modes, the mode-domain channel matrix $\mathbf{H}$ becomes dense and ill-conditioned, and coherent receivers must equalize before soft information can be passed to an FEC decoder---precisely the setting in which wireless receiver design is traditionally analyzed.
+The limiting factor in outdoor optical wireless links is the atmosphere. Turbulent eddies impose random phase and amplitude distortions along the path, producing scintillation (fading-like intensity fluctuations), beam wander, and inter-modal coupling~\cite{andrews2005laser, paterson2005atmospheric, ren2013atmospheric}. For OAM systems, the practical effect is loss of spatial orthogonality: energy leaks across modes, the mode-domain channel matrix $\mathbf{H}$ becomes dense and ill-conditioned, and coherent receivers must equalize before soft information can be passed to an FEC decoder---precisely the setting in which wireless receiver design is traditionally analyzed.
 
-Classical digital signal processing for OAM links---coherent projection onto a mode basis, pilot-aided channel estimation, linear or near-optimal equalization, and forward error correction---remains the interpretable benchmark against which new algorithms should be judged~\cite{huang2014100, ge2021oam}. When turbulence is mild, these chains perform well; when coupling strengthens, equalization amplifies noise and soft likelihood ratios delivered to the LDPC decoder collapse, eroding coding gain. Machine learning is a natural complement because it can map high-dimensional observations to symbols without explicit matrix inversion, yet published OAM studies often emphasize mode classification, compensation submodules, or unequal simulation assumptions~\cite{liu2019oam_prl, doster2017machine, karanov2018endtoend, zhao2020cnn, lohani2018turbulence, arya2023oam}. Two gaps stand out: (i)~few works couple a turbulence-aware physical simulator to a full LDPC-inclusive classical receiver evaluated on identical data and turbulence settings, and (ii)~intensity-only neural receivers are rarely compared under the same $C_n^2$ sweep as a validated coherent baseline.
+Classical digital signal processing for OAM links---coherent projection onto a mode basis, pilot-aided channel estimation, linear or near-optimal equalization, and forward error correction---remains the interpretable benchmark against which new algorithms should be judged~\cite{huang2014100, ge2021oam}. When turbulence is mild, these chains perform well; when coupling strengthens, equalization amplifies noise and soft likelihood ratios delivered to the LDPC decoder collapse, eroding coding gain. Machine learning is a natural complement because it can map high-dimensional observations to symbols without explicit matrix inversion, yet published OAM studies often emphasize mode classification, compensation submodules, or unequal simulation assumptions~\cite{liu2019oam_prl, doster2017machine, karanov2018endtoend, zhao2020cnn, lohani2018turbulence, arya2023oam}. In the studies reviewed here, two gaps stand out: (i)~few works couple a turbulence-aware physical simulator to a full LDPC-inclusive classical receiver evaluated on identical data and turbulence settings, and (ii)~intensity-only neural receivers are rarely compared under the same $C_n^2$ sweep as a validated coherent baseline.
 
-This paper narrows those gaps with a baseline-first methodology. We construct a single end-to-end pipeline---multiplexed QPSK on eight OAM modes, split-step Fourier propagation with Kolmogorov screens, aperture observation, pilot-aided least-squares estimation, MMSE equalization, phase recovery, and LDPC decoding---and sweep $C_n^2$ systematically to map where BER remains low, where the estimated channel matrix becomes ill-conditioned, and where FEC gain disappears. We then instantiate an intensity-only convolutional neural receiver trained with a five-stage curriculum on physics-generated intensity images drawn from the same simulator, enabling a controlled comparison under matched channels at 1550~nm over 1~km. The classical receiver is near error-free up to about $C_n^2 \approx 10^{-16}$, transitions as $\kappa(\hat{\mathbf{H}})$ rises, and saturates near BER $0.5$ beyond $\sim 10^{-14}$; the neural receiver remains useful in weak-to-moderate regimes but loses reliability under the strongest distortions, consistent with the information loss of phase-blind sensing relative to coherent reception~\cite{ren2013atmospheric}.
+This paper narrows those gaps with a baseline-first methodology. We construct a single end-to-end pipeline---multiplexed QPSK on eight OAM modes, split-step Fourier propagation with Kolmogorov screens, aperture observation, pilot-aided least-squares estimation, MMSE equalization, phase recovery, and LDPC decoding---and sweep $C_n^2$ systematically to map where BER remains low, where the estimated channel matrix becomes ill-conditioned, and where FEC gain disappears. We then instantiate an intensity-only convolutional neural receiver trained with a five-stage curriculum on physics-generated intensity images drawn from the same simulator, enabling a controlled comparison under matched channels at 1550~nm over 1~km. The classical receiver is near error-free up to about $C_n^2 \approx 10^{-16}$, transitions as $\kappa(\hat{\mathbf{H}})$ rises, and saturates near BER $0.5$ beyond $\sim 10^{-14}$; the neural receiver remains useful in weak-to-moderate regimes but loses reliability under the strongest distortions, consistent with phase-sensitive turbulence effects reported in prior OAM studies~\cite{ren2013atmospheric, paterson2005atmospheric}.
 
 The primary contributions of this paper are as follows:
 \begin{itemize}
@@ -83,7 +96,7 @@ The primary contributions of this paper are as follows:
 \item Consistent neural-receiver framework and training protocol, formulated as an intensity-only curriculum-based extension of the same physical pipeline, so that future comparisons are against a verified reference rather than an uncalibrated one.
 \end{itemize}
 
-A few sub-problems in the existing literature bear directly on what is done here. Turbulence propagation for OAM links is typically modeled via split-step Fourier methods~\cite{schmidt2010numerical} and Kolmogorov phase screens~\cite{andrews2005laser}; LDPC coding is widely used for FEC in optical systems~\cite{richardson2008modern}. Classical DSP approaches for OAM demultiplexing include MMSE equalization~\cite{huang2014100} and K-best detection~\cite{ge2021oam}. Existing deep-learning studies have generally focused on mode classification or turbulence-compensation subproblems rather than end-to-end symbol recovery~\cite{liu2019oam_prl, doster2017machine, karanov2018endtoend, zhao2020cnn}. OAM mode classification and demultiplexing using CNNs have been explored by several groups~\cite{lohani2018turbulence, doster2017machine, arya2023oam}; others have applied deep learning to optical signal detection and turbulence compensation tasks~\cite{karanov2018endtoend, zhao2020cnn}. Table~\ref{tab:comparison} places the present work alongside these studies.
+A few sub-problems in the existing literature bear directly on what is done here. Turbulence propagation for OAM links is typically modeled via split-step Fourier methods~\cite{schmidt2010numerical} and Kolmogorov phase screens~\cite{andrews2005laser}; LDPC coding is widely used for FEC in optical systems~\cite{richardson2008modern}. Classical DSP approaches for OAM demultiplexing include MMSE equalization~\cite{huang2014100}, K-best detection~\cite{ge2021oam}, and channel-matrix equalization for OAM crosstalk mitigation~\cite{ren2014mimo_oam}. Existing deep-learning studies have generally focused on mode classification or turbulence-compensation subproblems rather than end-to-end symbol recovery~\cite{liu2019oam_prl, doster2017machine, karanov2018endtoend, zhao2020cnn}. OAM mode classification and demultiplexing using CNNs have been explored by several groups~\cite{doster2017machine, arya2023oam}; others have applied deep learning to optical signal detection and turbulence compensation tasks~\cite{lohani2018turbulence, karanov2018endtoend, zhao2020cnn}. Table~\ref{tab:comparison} places the present work alongside these studies.
 
 The paper is organized as follows. Section~\ref{sec:channel} develops the link model and describes the classical MMSE+LDPC baseline. Section~\ref{sec:neural} covers the neural receiver architecture and curriculum training. Results are presented and interpreted in Section~\ref{sec:results}. Section~\ref{sec:conclusion} concludes.
 
@@ -91,22 +104,24 @@ The paper is organized as follows. Section~\ref{sec:channel} develops the link m
 \centering
 \caption{Comparison with Related Work}
 \label{tab:comparison}
-\small
+\footnotesize
 \setlength{\tabcolsep}{5pt}
-\renewcommand{\arraystretch}{1.12}
-\begin{tabularx}{\textwidth}{lXXcXX}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lcccccc}
 \toprule
-\textbf{Method} & \textbf{Task} & \textbf{Input} & \textbf{Pilot} & \textbf{Scope} & \textbf{Limitation} \\
+\textbf{Method} & \makecell{\textbf{Symbol}\\\textbf{Recovery}} & \textbf{Coherent} & \makecell{\textbf{Pilot}\\\textbf{Aided}} & \makecell{\textbf{Optical}\\\textbf{Wireless/OAM}\\\textbf{Turbulence}} & \makecell{\textbf{End-to-}\\\textbf{End}} & \makecell{\textbf{Weak}\\\textbf{$\rightarrow$ Extreme Sweep}} \\
 \midrule
-MMSE~\cite{huang2014100} & Symbol recovery & Coherent modal outputs & Pilot-aided & Weak to moderate turbulence & Ill-conditioned inversion under strong crosstalk \\
-K-best~\cite{ge2021oam} & Symbol recovery & Coherent modal outputs & Pilot-aided & Weak to moderate turbulence & Higher complexity, tied to channel inversion \\
-CNN (Mode)~\cite{doster2017machine} & Mode classification / demux & Intensity images & Pilot-free & Weak to moderate & No direct symbol recovery \\
-End-to-end DL~\cite{karanov2018endtoend} & Fiber IM/DD transceiver (NN) & Learned waveforms / intensity & None (joint) & Lab + simulation fiber link & Fiber channel; not FSO / OAM turbulence \\
-AlexNet~\cite{zhao2020cnn} & Turbulence compensation & Intensity images & Auxiliary & Moderate turbulence & Not end-to-end demodulation \\
+MMSE~\cite{huang2014100} & \checkmark & \checkmark & \checkmark & \checkmark & -- & -- \\
+K-best~\cite{ge2021oam} & \checkmark & \checkmark & \checkmark & \checkmark & -- & -- \\
+CNN (Mode)~\cite{doster2017machine} & -- & -- & -- & \checkmark & -- & -- \\
+End-to-end DL~\cite{karanov2018endtoend} & \checkmark & -- & -- & -- & \checkmark & -- \\
+AlexNet~\cite{zhao2020cnn} & -- & -- & -- & \checkmark & -- & -- \\
 \midrule
-\textbf{This work} & Baseline validation + neural evaluation & Coherent baseline; intensity-only neural & Pilot-aided; pilot-free (neural) & Validated across five $C_n^2$ regimes, ideal to extreme & Intensity-only neural degrades under strong/extreme turbulence; phase information not exploited \\
+\textbf{This work} & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
 \bottomrule
-\end{tabularx}
+\end{tabular}
+\vspace{0.7mm}
+\parbox{0.95\textwidth}{\footnotesize\textit{Legend:} ``Symbol Recovery'' denotes direct symbol recovery output. ``Coherent'' denotes coherent modal observation. ``Optical Wireless/OAM Turbulence'' denotes modeling/evaluation on free-space OAM turbulence channels.}
 \end{table*}
 
 %==============================================================================
@@ -115,16 +130,9 @@ AlexNet~\cite{zhao2020cnn} & Turbulence compensation & Intensity images & Auxili
 \section{Channel Model and Classical Receiver Baseline}
 \label{sec:channel}
 
-Acronyms are listed in Table~\ref{tab:abbreviations}. What follows develops the OAM optical link model and the classical receiver built on top of it. Fig.~\ref{fig:comprehensive_system_model} summarizes the shared front end: coded QPSK symbols excite multiplexed LG modes, the field propagates through Kolmogorov turbulence with a swept $C_n^2$, and the observation is split into a coherent branch (modal projection, pilot-aided $\hat{\mathbf{H}}$, MMSE, LDPC) and an intensity-only neural branch evaluated on matched realizations. Fig.~\ref{fig:system_architecture} details the classical signal flow from encoding through decoding.
+Acronyms are listed in Table~\ref{tab:abbreviations}. What follows develops the OAM optical link model and the classical receiver built on top of it. The shared front end maps coded QPSK symbols onto multiplexed LG modes, propagates through Kolmogorov turbulence with a swept $C_n^2$, and forms observations for coherent processing and neural evaluation under matched channel assumptions.
 
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\figdbl]{images/system_model_diagram.pdf}
-\caption{Comprehensive OAM optical system model with a shared propagation backbone and two receiver tracks. The shared chain maps coded QPSK symbols onto multiplexed OAM modes, propagates through turbulence ($C_n^2$ sweep), and forms a common received observation. The classical branch performs coherent observation and pilot-aided LS/MMSE recovery, while the neural branch performs intensity-based learned symbol mapping; both are evaluated under matched channel assumptions.}
-\label{fig:comprehensive_system_model}
-\end{figure*}
-
-\begin{table}[!t]
+\begin{table}[htbp]
 \centering
 \caption{Abbreviations and Acronyms}
 \label{tab:abbreviations}
@@ -147,7 +155,10 @@ SNR & Signal-to-Noise Ratio \\
 SSFM & Split-Step Fourier Method \\
 \bottomrule
 \end{tabular}
+\vspace{0.5mm}
+\parbox{0.95\columnwidth}{\footnotesize\textit{Legend:} $C_n^2$ denotes the refractive-index structure parameter (units: m$^{-2/3}$).}
 \end{table}
+
 
 The link model rests on superimposed Laguerre-Gaussian (LG) beams propagated through the turbulence channel using split-step Fourier simulation. At the transmitter, independent coded data streams are modulated to QPSK symbols $s_m \in \{ \pm \frac{1}{\sqrt{2}} \pm j\frac{1}{\sqrt{2}} \}$, one per spatial mode $m \in \{1, 2, \dots, M\}$, and each symbol then modulates the corresponding orthogonal LG beam. The complex electric field of an LG beam with radial index $p$ and azimuthal index (topological charge) $l$, at the beam waist ($z=0$), is described as
 \begin{equation}
@@ -172,7 +183,7 @@ where $C_n^2$ (in m$^{-2/3}$) is the refractive-index structure parameter and $\
 
 Table~\ref{tab:link_params} lists the link and simulation parameters. Attenuation includes free-space path loss and geometric loss; the receiver aperture clips the field before coherent projection. Modal overlap versus $C_n^2$ is analyzed later in Section~\ref{sec:results} alongside BER and channel-matrix results.
 
-\begin{table}[!t]
+\begin{table}[htbp]
 \centering
 \caption{Link and Simulation Parameters}
 \label{tab:link_params}
@@ -197,12 +208,6 @@ SNR (at receiver) & 35~dB \\
 \end{tabular}
 \end{table}
 
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\figcolvertw,height=\figcolverth,keepaspectratio]{images/classical/system_architecture.png}
-\caption{Classical baseline receiver architecture for OAM-multiplexed optical links. Data flows from encoding and modulation through turbulent propagation to coherent modal projection, pilot-aided channel estimation, MMSE equalization, blind carrier phase correction, and LDPC decoding.}
-\label{fig:system_architecture}
-\end{figure}
 
 The classical receiver has coherent access to the modal projections and a set of known pilot symbols, which allows the channel to be estimated and MMSE equalization applied before passing soft information to the LDPC decoder. The analog field is first demultiplexed via coherent matched filtering. The $m$th projected output is defined as
 \begin{equation}
@@ -264,26 +269,14 @@ Taken together, the shift from near-diagonal to diffuse channel structure as $\k
 
 The classical chain in Section~\ref{sec:channel} becomes ill-conditioned when turbulence-induced coupling strengthens, so that MMSE equalization and FEC face the same noise-amplification limits summarized by rising $\kappa(\hat{\mathbf{H}})$. A learned receiver offers an alternative mapping from observations to symbols without explicit pilot-based matrix inversion; here we restrict observations to intensity-only images so that the comparison isolates what can be recovered without phase references or coherent projection. The neural receiver is trained on data from the same SSFM backbone as the baseline. Fig.~\ref{fig:neural_vs_classical} shows the two branches side by side.
 
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\figcolvertw,height=\figcolverth,keepaspectratio]{images/neural/system_architecture.png}
-\caption{High-level comparison: classical branch uses coherent projection and pilot-aided MMSE; neural branch uses intensity-only input and learned mapping $f_\theta$. Both share the same optical propagation model.}
-\label{fig:neural_vs_classical}
-\end{figure}
 
-The neural receiver takes raw intensity images as input and tries to recover the transmitted symbols directly, without any coherent projection or channel estimation step. Intensity images discard the phase of the received field entirely, which is a significant information loss relative to coherent detection; the trade-off is that no phase reference or pilot overhead is needed. The \texttt{FSOModel} accepts a single-channel, normalized intensity image $\mathbf{I} \in \mathbb{R}^{H \times W \times 1}$ ($H=W=128$) and outputs $M$ complex QPSK symbols. The input--output map is described as
+The neural receiver takes raw intensity images as input and tries to recover the transmitted symbols directly, without any coherent projection or channel estimation step. Intensity images discard the phase of the received field entirely, which is a significant information loss relative to coherent detection; the trade-off is that no phase reference or pilot overhead is needed. The \texttt{OpticalWirelessModel} accepts a single-channel, normalized intensity image $\mathbf{I} \in \mathbb{R}^{H \times W \times 1}$ ($H=W=128$) and outputs $M$ complex QPSK symbols. The input--output map is described as
 \begin{equation}
 \label{eq:fso_model}
     \hat{\mathbf{s}} = f_{\theta}(\mathbf{I}),
 \end{equation}
 where $f_{\theta}$ denotes the trainable network with parameters $\theta$. In place of coherent projection, channel estimation, and MMSE equalization, everything is folded into a single learned function of the intensity image. The backbone is either ConvNeXt~\cite{liu2022convnet} or EfficientNet~\cite{tan2019efficientnet}, with the stem modified for single-channel optical input by averaging the pre-trained RGB weights across channels (``Smart Initialization''), which lets the model start from a reasonable feature set without retraining the backbone from scratch. The projection head regresses latent features down to $2M$ real values for the I/Q components. Fig.~\ref{fig:neural_inference} shows the inference path from optical propagation through intensity capture to symbol regression and BER evaluation at coded level.
 
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\figdbl]{images/neural/fso_turbulence_prop.png}
-\caption{Neural receiver inference architecture. Intensity-only input flows through stem adaptation, backbone, and a projection head that regresses $M$ complex QPSK symbols. BER/SER is evaluated at coded level (QPSK demodulation to bits). No LDPC decoding stage is used here, allowing direct comparison with the classical chain at pre-LDPC level.}
-\label{fig:neural_inference}
-\end{figure*}
 
 % \FloatBarrier
 Training pairs a physics-generated dataset with a five-stage curriculum, chiefly to sidestep the gradient collapse that direct training on extreme turbulence tends to cause. The training data consists of physics-generated HDF5 datasets: each sample is a single-channel $128 \times 128$ intensity map paired with an $8 \times 2$ real tensor holding the I/Q components of the eight transmitted QPSK symbols. Each stage draws 50{,}000 training samples, 5{,}000 for validation, and 5{,}000 for test, with $C_n^2$ drawn on a log scale across the stage's range. The five stages cover ideal/very weak ($10^{-18}$--$10^{-17}$), weak ($10^{-17}$--$10^{-16}$), moderate ($10^{-16}$--$10^{-15}$), strong ($10^{-15}$--$10^{-14}$), and extreme ($10^{-14}$--$10^{-12}$) turbulence. Inputs are stored with per-sample normalization; standard ImageNet-style channel renormalization is intentionally skipped so the network processes physics-scaled intensity values as-is.
@@ -304,15 +297,10 @@ where $l_m$ is the azimuthal index of the $m$th mode. Rotated intensity images w
 
 Training directly on extreme turbulence ($C_n^2 \ge 10^{-13}$) causes gradient collapse. Instead, we follow a physics-aware curriculum~\cite{bengio2009curriculum, soviany2022curriculum} that mirrors the physical ordering of regimes: stage~1 (ideal/very weak), then stage~2 (weak), stage~3 (moderate), stage~4 (strong), and stage~5 (extreme), with $C_n^2$ drawn log-uniformly within the bands stated at the start of this section. The best checkpoint from each stage initializes the next, so optimization accumulates rather than restarting from scratch on harsh statistics alone. Fig.~\ref{fig:neural_curriculum} illustrates the training pipeline.
 
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\figdblsmall]{images/neural/curriculum_training.png}
-\caption{Curriculum learning training pipeline. Five sequential stages from ideal/very weak ($C_n^2 \approx 10^{-18}$--$10^{-17}$) to extreme ($C_n^2 = 10^{-14}$--$10^{-12}$) turbulence. Weights from each stage are frozen and transferred to the next; Polar Loss and validation-driven checkpointing are applied per stage.}
-\label{fig:neural_curriculum}
-\end{figure*}
 
 % \FloatBarrier
-\begin{table}[!t]
+
+\begin{table}[htbp]
 \centering
 \caption{Neural Receiver Training Configuration}
 \label{tab:neural_hparams}
@@ -381,27 +369,14 @@ At inference time the model is frozen; batches of intensity maps are mapped to s
 \section{Results}
 \label{sec:results}
 
-The classical baseline is validated first. Table~\ref{tab:link_params} gives the full simulation setup: eight-mode OAM-multiplexed QPSK at 1550~nm over 1~km, turbulence modeled via split-step Fourier propagation with Kolmogorov phase screens. At each $C_n^2$ operating point, results are averaged over 2 independent channel realizations of 3332 bits each.
+The classical baseline is validated first. Table~\ref{tab:link_params} gives the full simulation setup: eight-mode OAM-multiplexed QPSK at 1550~nm over 1~km, turbulence modeled via split-step Fourier propagation with Kolmogorov phase screens~\cite{schmidt2010numerical, andrews2005laser}. At each $C_n^2$ operating point, results are averaged over 2 independent channel realizations of 3332 bits each.
 
 Fig.~\ref{fig:mode_overlap} quantifies how overlap between each propagated mode and its undisturbed reference falls as $C_n^2$ increases. The decline is fairly steep across modes and sets in somewhat sooner for higher-order modes, foreshadowing the BER transition observed below.
 
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\figcol]{images/classical/modal_overlap_vs_cn2.png}
-\caption{Mode overlap versus turbulence strength $C_n^2$. Each curve shows the overlap of a propagated LG mode with its pristine counterpart. The decline quantifies the loss of modal fidelity that drives inter-modal crosstalk and BER degradation.}
-\label{fig:mode_overlap}
-\end{figure}
 
 The BER-versus-$C_n^2$ curve in Fig.~\ref{fig:ber_main} shows a consistent pattern. In weak turbulence ($C_n^2 \lesssim 10^{-16}$), BER remains near zero and LDPC gain is clear. In the transition region ($C_n^2 \approx 10^{-15}$--$10^{-14}$), modal coupling rises quickly, pre- and post-LDPC BER both increase, and the gap between them narrows as $\kappa(\hat{\mathbf{H}})$ grows from about 2 to about 17. Beyond $10^{-14}$, the curves merge near 0.5, which is close to random guessing. Table~\ref{tab:ber_key} gives BER and $\kappa(\hat{\mathbf{H}})$ at representative operating points, and Fig.~\ref{fig:channel_matrices} shows the evolution of $|\hat{\mathbf{H}}|$ from ideal to extreme turbulence.
 
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\figcol]{images/classical/pre_post_ldpc_ber.pdf}
-\caption{Classical baseline BER versus turbulence strength $C_n^2$. Pre-LDPC (dashed) and post-LDPC (solid) curves show coding gain in weak turbulence and its collapse in the transition regime.}
-\label{fig:ber_main}
-\end{figure}
-
-\begin{table}[!t]
+\begin{table}[htbp]
 \centering
 \caption{Classical Baseline BER at Representative $C_n^2$ (SNR = 35~dB)}
 \label{tab:ber_key}
@@ -424,33 +399,8 @@ $10^{-12}$ & 0.50 & 0.50 & 22.8 \\
 {\footnotesize $^\dagger$At $C_n^2=10^{-16}$, zero hard-decision pre-LDPC errors were observed across 2 channel realizations (6{,}664 coded bits). The nonzero post-LDPC figure reflects marginal soft LLR quality at this operating point and is statistically unreliable at this sample size; additional realizations are needed for a reliable post-LDPC estimate in this regime.}
 \end{table}
 
-\begin{figure*}[!t]
-\centering
-\setlength{\tabcolsep}{2pt}
-\begin{tabular}{@{}c@{\hspace{2pt}}c@{\hspace{2pt}}c@{}}
-\subfloat[Ideal.\label{fig:ch_ideal}]{%
-  \includegraphics[width=0.31\textwidth]{images/classical/ideal_channel_matrix.png}%
-} &
-\subfloat[Weak.\label{fig:ch_weak}]{%
-  \includegraphics[width=0.31\textwidth]{images/classical/weak_channel_matrix.png}%
-} &
-\subfloat[Moderate.\label{fig:ch_moderate}]{%
-  \includegraphics[width=0.31\textwidth]{images/classical/moderate_channel_matrix.png}%
-}
-\end{tabular}\\[0.8ex]
-\begin{tabular}{@{}c@{\hspace{6pt}}c@{}}
-\subfloat[Transition/strong.\label{fig:ch_transition}]{%
-  \includegraphics[width=0.31\textwidth]{images/classical/transition_channel_matrix.png}%
-} &
-\subfloat[Extreme.\label{fig:ch_extreme}]{%
-  \includegraphics[width=0.31\textwidth]{images/classical/extreme_channel_matrix.png}%
-}
-\end{tabular}
-\caption{Estimated channel matrix magnitude $|\hat{\mathbf{H}}|$ across representative classical operating regimes. (a) Ideal ($C_n^2 = 10^{-18}$): near-perfect diagonal structure; (b) weak: strong diagonal dominance with limited coupling; (c) moderate: off-diagonal mixing begins to emerge; (d) transition/strong: modal structure degrades rapidly; (e) extreme: the matrix loses clear diagonal dominance and approaches diffuse coupling.}
-\label{fig:channel_matrices}
-\end{figure*}
 
-Three points are worth emphasizing. LDPC gain is substantial only in weak turbulence; once $C_n^2$ passes roughly $10^{-15}$, the pre- and post-decoding curves merge, which suggests the soft information is too corrupted to recover. The rise in ill-conditioning, with $\kappa(\hat{\mathbf{H}})$ moving from near unity to beyond 17, tracks the BER increase closely and is consistent with MMSE noise amplification as the channel matrix degrades. Beyond $10^{-14}$, the matrices lose clear diagonal structure and BER settles near 0.5, making recovery effectively infeasible for this receiver design. Table~\ref{tab:performance_summary} summarizes this regime behavior.
+Three points are worth emphasizing. LDPC gain is substantial only in weak turbulence; once $C_n^2$ passes roughly $10^{-15}$, the pre- and post-decoding curves merge, which suggests the soft information is too corrupted to recover. The rise in ill-conditioning, with $\kappa(\hat{\mathbf{H}})$ moving from near unity to beyond 17, tracks the BER increase closely and is consistent with MMSE noise amplification as the channel matrix degrades~\cite{kay1993fundamentals, ren2014mimo_oam}. Beyond $10^{-14}$, the matrices lose clear diagonal structure and BER settles near 0.5, making recovery effectively infeasible for this receiver design. Table~\ref{tab:performance_summary} summarizes this regime behavior.
 
 With the classical failure pattern established, the question becomes how the curriculum-trained neural receiver fares under the same conditions.
 
@@ -460,43 +410,9 @@ Through the ideal stage, the neural receiver essentially hits the measurement fl
 
 The strong and extreme stages are where things get noticeably worse. In the strong interval ($10^{-15}$--$10^{-14}$), BER climbs well above the floor and tends to sit somewhere between $10^{-2}$ and a few times $10^{-1}$, reaching around $0.28$ near the top of the range. In the extreme interval ($10^{-14}$--$10^{-12}$), BER opens near $0.3$ and climbs toward $0.5$, which in practice means the model is making nearly random decisions for much of that range. This is visible in the constellation plots too: clean four-way QPSK clusters in the ideal case gradually broaden and eventually collapse into a diffuse central cloud in the extreme stage, where the original decision boundaries are largely gone.
 
-Relative to the classical chain, the neural receiver holds up best in the weak and lower-moderate range, roughly where the classical chain starts to climb because of ill-conditioning. The neural model also degrades under strong turbulence, but the combined view suggests the drop to near-random performance is delayed until the extreme stage rather than occurring right at transition. Overall, this indicates a limited but real role for intensity-only recovery in moderate turbulence, where coherent inversion is already under stress. It should not be expected to remain effective under the strongest distortions.
+Relative to the classical chain, the neural receiver holds up best in the weak and lower-moderate range, roughly where the classical chain starts to climb because of ill-conditioning. The neural model also degrades under strong turbulence, but the combined view suggests the drop to near-random performance is delayed until the extreme stage rather than occurring right at transition. Overall, this indicates a limited but real role for intensity-only recovery in moderate turbulence, where coherent inversion is already under stress. It should not be expected to remain effective under the strongest distortions, consistent with prior reports of turbulence-driven OAM mode mixing and phase sensitivity~\cite{paterson2005atmospheric, ren2013atmospheric}.
 
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\figdbl]{images/neural/results/merged_ber_lvl1_to_lvl5_same_mixed_model.png}
-\caption{Neural receiver BER across all five curriculum stages, same mixed model. Floor-level performance holds through the ideal and weak regimes; moderate conditions start to introduce occasional excursions; the strong interval pushes BER into $10^{-2}$--$10^{-1}$; and by the extreme regime the model is largely guessing.}
-\label{fig:neural_stage_ber_all}
-\end{figure*}
-
-\begin{figure*}[!t]
-\centering
-\setlength{\tabcolsep}{2pt}
-\begin{tabular}{@{}c@{\hspace{2pt}}c@{\hspace{2pt}}c@{}}
-\subfloat[Ideal.\label{fig:neural_const_ideal}]{%
-  \includegraphics[width=0.31\textwidth]{images/neural/results/cnn_constellation_convnext_tiny_curriculum_lvl1_ideal.png}%
-} &
-\subfloat[Weak.\label{fig:neural_const_weak}]{%
-  \includegraphics[width=0.31\textwidth]{images/neural/results/cnn_constellation_convnext_tiny_curriculum_lvl2_weak.png}%
-} &
-\subfloat[Moderate.\label{fig:neural_const_moderate}]{%
-  \includegraphics[width=0.31\textwidth]{images/neural/results/cnn_constellation_convnext_tiny_curriculum_lvl3_moderate.png}%
-}
-\end{tabular}\\[0.8ex]
-\begin{tabular}{@{}c@{\hspace{6pt}}c@{}}
-\subfloat[Strong.\label{fig:neural_const_strong}]{%
-  \includegraphics[width=0.31\textwidth]{images/neural/results/cnn_constellation_convnext_tiny_curriculum_lvl4_strong.png}%
-} &
-\subfloat[Extreme.\label{fig:neural_const_extreme}]{%
-  \includegraphics[width=0.31\textwidth]{images/neural/results/cnn_constellation_convnext_tiny_curriculum_lvl5_extreme.png}%
-}
-\end{tabular}
-\caption{Neural-receiver constellations at each curriculum stage. Clear four-way clusters in the ideal and weak cases give way to widening scatter in the strong regime; by the extreme stage the original decision boundaries are largely gone.}
-\label{fig:neural_stage_constellation_progression}
-\end{figure*}
-
-% \FloatBarrier
-\begin{table}[!t]
+\begin{table}[htbp]
 \centering
 \caption{Qualitative Summary of Classical Baseline Behavior}
 \label{tab:performance_summary}
@@ -513,6 +429,9 @@ Strong/Extreme & $\gtrsim 10^{-14}$ & Channel mixing dominates; BER $\approx$ 0.
 \end{tabularx}
 \end{table}
 
+
+% \FloatBarrier
+
 The classical MMSE chain requires a matrix inversion every symbol slot ($O(M^3)$, manageable for $M=8$), whereas the neural receiver pays its main cost during training and then runs at fixed latency once deployed.
 
 % \FloatBarrier
@@ -524,9 +443,9 @@ The classical MMSE chain requires a matrix inversion every symbol slot ($O(M^3)$
 
 From a wireless-system perspective, the results separate three operational regimes for the considered OAM link: a weak-turbulence regime where pilot-aided coherent processing and FEC remain effective, a transition where $\kappa(\hat{\mathbf{H}})$ rises and soft information quality collapses, and a strong regime where reliable decoding is not supported by either the classical or intensity-only architectures tested here. The numerical framework itself is the enabling artifact: one propagation model, one $C_n^2$ sweep, and two receiver classes that differ only in observation and algorithm, which is the comparison pattern TWC readers expect when judging new receiver ideas against a verifiable reference.
 
-Design implications are as follows. First, any learning-based OAM receiver should be reported against a full channel-estimation and FEC chain under matched statistics, not in isolation or on mismatched physics. Second, intensity-only CNNs can narrow the implementation gap where coherent optics are unavailable, but they cannot recover information that turbulence destroys at the phase front; their utility in moderate turbulence should be weighed against hardware and latency costs of coherent reception. Third, Table~\ref{tab:ber_key} underscores that a single BER point is insufficient---$\kappa(\hat{\mathbf{H}})$ and pre/post-FEC curves together explain \emph{why} performance changes.
+Design implications are as follows. First, any learning-based OAM receiver should be reported against a full channel-estimation and FEC chain under matched statistics, not in isolation or on mismatched physics. Second, intensity-only CNNs can narrow the implementation gap where coherent optics are unavailable, but in our experiments they do not fully recover the performance lost when phase information is unavailable at the receiver; their utility in moderate turbulence should be weighed against hardware and latency costs of coherent reception. Third, Table~\ref{tab:ber_key} underscores that a single BER point is insufficient---$\kappa(\hat{\mathbf{H}})$ and pre/post-FEC curves together explain \emph{why} performance changes.
 
-Limitations include simulation-only validation, a single range and geometry, two channel realizations per $C_n^2$ in Section~\ref{sec:results}, and a neural path without LDPC so that comparisons stay at a consistent symbol metric. Outdoor links would add temporal fading, misalignment, and aperture effects beyond Kolmogorov screens alone.
+Limitations include simulation-only validation, a single range and geometry, two channel realizations per $C_n^2$ in Section~\ref{sec:results}, and a neural path without LDPC so that comparisons stay at a consistent symbol metric. Outdoor links would add temporal fading, misalignment, and aperture effects beyond Kolmogorov screens alone~\cite{andrews2005laser}.
 
 Future work may (i)~fuse intensity features with partial coherent measurements or sparse pilots, (ii)~train neural decoders that consume LLRs jointly with classical front ends, (iii)~scale $M$ and distance, and (iv)~field-test regimes where the simulator predicts usable performance. These directions extend the baseline established here rather than replacing it.
 
@@ -535,6 +454,5 @@ Future work may (i)~fuse intensity features with partial coherent measurements o
 \bibliography{references}
 
 \end{document}
-
 
 
